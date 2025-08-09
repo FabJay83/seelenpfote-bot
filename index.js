@@ -236,7 +236,7 @@ bot.on('text', async (ctx) => {
   }
 
   // 4) Alter/Gewicht/Seit-wann erkennen — auch wenn state irrtümlich idle
-  if (p.state === 'await_profile' || p.state === 'idle')) {
+  if (p.state === 'await_profile' || p.state === 'idle') {
     const age = parseAge(t);
     const weight = parseWeight(t);
     const since = parseSince(t);

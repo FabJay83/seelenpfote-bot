@@ -1,4 +1,4 @@
-// index.js — Seelenpfote Bot (Telegraf)
+// index.js — Seelenpfote Bot (Telegraf) — Vollversion mit Webhook-Reset & Polling
 
 const { Telegraf, session, Markup } = require('telegraf');
 
@@ -31,7 +31,7 @@ const mainKb = Markup.keyboard([
   ['📨 /kontakt', '🔒 /datenschutz']
 ]).resize();
 
-// --- Hilfsfunktionen ---
+// --- Hilfsfunktion: Begrüßung ---
 async function welcome(ctx) {
   const p = profile(ctx);
   await ctx.reply(
@@ -105,7 +105,10 @@ bot.on('photo', async (ctx) => {
 });
 
 // --- Text: einfache Symptom-Erkennung + persönlicher Fallback ---
-bot.on('text', async (ctx) => {
+bot.on('text', async (ctx, next) => {
+  // Logging jeder eingehenden Text-Nachricht (hilft beim Debuggen)
+  console.log('📥 Text von', ctx.from?.username || ctx.from?.id, ':', ctx.message.text);
+
   const p = profile(ctx);
   const t = (ctx.message.text || '').trim();
 
@@ -133,26 +136,32 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // allgemeiner, persönlicher Fallback
   await ctx.reply(
     `Danke, ${p.name}. Magst du Alter, Gewicht und seit wann das Problem besteht sagen?` +
     `${p.pet ? ` (Tier: ${p.pet})` : ''}`
   );
+  return next && next();
 });
 
-// --- Start mit Check + sauberes Stoppen ---
+// --- Start mit Webhook-Reset + Polling + Logging ---
 (async () => {
   try {
+    // Wichtig: vorhandenen Webhook entfernen, damit Polling Nachrichten bekommt
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+
     const me = await bot.telegram.getMe();
     console.log('✅ Verbunden als @' + me.username);
-    await bot.launch();
-    console.log('🚀 Seelenpfote Bot läuft');
+
+    await bot.launch({ polling: true });
+    console.log('🚀 Seelenpfote Bot läuft (Polling aktiv)');
   } catch (e) {
     console.error('❌ Startfehler:', e);
     process.exit(1);
   }
 })();
+
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 
 

@@ -1,7 +1,8 @@
-// index.js — Seelenpfote Bot (Telegraf) — Große Erste-Hilfe-Version
+// index.js — Seelenpfote Bot (Telegraf) — Persönlich, ohne Buttons (Final)
 
 const { Telegraf, session, Markup } = require('telegraf');
 
+// --- BOT_TOKEN prüfen ---
 const TOKEN = process.env.BOT_TOKEN;
 if (!TOKEN || TOKEN.trim().length < 30) {
   console.error('❌ BOT_TOKEN fehlt/ungültig.');
@@ -9,7 +10,7 @@ if (!TOKEN || TOKEN.trim().length < 30) {
 }
 const bot = new Telegraf(TOKEN.trim());
 
-// -------- Safety & Sessions --------
+// ----------------- Safety & Sessions -----------------
 bot.catch((err) => console.error('⚠️ Bot-Fehler:', err));
 bot.use((ctx, next) => { if (!ctx.session) ctx.session = {}; return next(); });
 bot.use(session());
@@ -20,10 +21,10 @@ function ensureProfile(ctx) {
     ctx.session.profile = {
       id: ctx.from?.id,
       name: ctx.from?.first_name || 'Freund',
-      pet: null,              // 'Hund'|'Katze'
-      lastIssue: null,        // Thema-Schlüssel
+      pet: null,              // 'Hund' | 'Katze'
+      lastIssue: null,        // Themen-Schlüssel
       lastPhotoTs: null,
-      state: 'idle',          // 'idle'|'await_details'|'await_profile'
+      state: 'idle',          // 'idle' | 'await_details' | 'await_profile'
       details: {},            // since, pain, feverVomiting, behavior, age, weight
     };
   }
@@ -36,7 +37,7 @@ function setState(p, next) {
   }
 }
 
-// -------- UI --------
+// ----------------- UI / Begrüßung -----------------
 const mainKb = Markup.keyboard([
   ['🆘 /notfall', 'ℹ️ /hilfe'],
   ['📨 /kontakt', '🔒 /datenschutz']
@@ -45,26 +46,26 @@ const mainKb = Markup.keyboard([
 async function welcome(ctx) {
   const p = ensureProfile(ctx);
   await ctx.reply(
-    `🐾 Hallo ${p.name}! Ich bin *Seelenpfote*.\n` +
-    `Schreib mir, was los ist – oder schick ein *Foto*. Ich gebe dir eine ruhige Ersteinschätzung.`,
+    `🐾 Hallo ${p.name}! Schön, dass du da bist. Ich bin *Seelenpfote* – ruhig, herzlich und an deiner Seite.\n` +
+    `Erzähl mir einfach, was los ist. Wenn’s hilft, schick mir auch gern ein *Foto*.`,
     { parse_mode: 'Markdown', ...mainKb }
   );
   if (!p.pet) {
-    await ctx.reply('Hast du einen *Hund* oder eine *Katze*? Antworte mit „Hund“ oder „Katze“.',{ parse_mode:'Markdown' });
+    await ctx.reply('Hast du einen *Hund* oder eine *Katze*? Antworte einfach mit „Hund“ oder „Katze“.',{ parse_mode:'Markdown' });
   }
 }
 
-// -------- Commands --------
+// ----------------- Commands -----------------
 bot.start((ctx)=>welcome(ctx));
 
 bot.command('hilfe', async (ctx) => {
   const p = ensureProfile(ctx); setState(p,'idle');
   await ctx.reply(
-    `So nutzt du Seelenpfote, ${p.name}:\n` +
-    `1) Problem kurz beschreiben (z. B. „humpelt“, „Durchfall“, „hat etwas Giftiges gefressen“).\n` +
-    `2) Foto/Video senden (falls sinnvoll).\n` +
-    `3) Ich gebe dir *Erste Schritte* & *nächste Optionen*.\n\n` +
-    `⚠️ Ich *ersetze keinen Tierarzt*. Bei Atemnot, starken Schmerzen, Krämpfen, Kollaps sofort Notdienst.`,
+    `So laufen wir zusammen, ${p.name}:\n` +
+    `1) Du beschreibst kurz das Thema (z. B. „humpelt“, „Durchfall“, „hat etwas Giftiges gefressen“).\n` +
+    `2) Foto/Video gern dazu.\n` +
+    `3) Ich gebe dir *Erste Schritte* und *ruhige Orientierung*.\n\n` +
+    `⚠️ Ich *ersetze keinen Tierarzt*. Bei Atemnot, starken Schmerzen, Krämpfen oder Kollaps bitte sofort Notdienst.`,
     { parse_mode:'Markdown' }
   );
 });
@@ -72,13 +73,12 @@ bot.command('hilfe', async (ctx) => {
 bot.command('notfall', async (ctx) => {
   const p = ensureProfile(ctx); setState(p,'idle');
   await ctx.reply(
-    `Allgemein bei Notfällen:\n` +
-    `• Ruhig bleiben, Tier sichern, warm halten (nicht überhitzen)\n` +
+    `Wenn es dringend wirkt: ruhig atmen, Tier sichern, warm halten (nicht überhitzen).\n` +
     `• Starke Blutung: *sanfter Druck* mit sauberem Tuch\n` +
-    `• Atemnot/Kollaps/Krampf: *sofort* Tierarzt-Notdienst\n` +
     `• Vergiftung: *kein* Erbrechen auslösen, Verpackung sichern\n` +
-    `• Hitzschlag: Schatten, Lüften, Pfoten/Brust *lauwarm* kühlen\n\n` +
-    `Schreib mir das *Hauptproblem*, ich gebe dir gezielte Schritte.`,
+    `• Hitzschlag: Schatten, Pfoten/Brust *lauwarm* kühlen\n` +
+    `• Atemnot/Kollaps/Krampf: *sofort* Notdienst\n\n` +
+    `Schreib mir das *Hauptproblem*, ich helfe dir direkt.`,
     { parse_mode:'Markdown' }
   );
 });
@@ -91,28 +91,28 @@ bot.command('datenschutz', (ctx)=>
   ctx.reply('🔒 Kurzfassung: Ich speichere nur, was nötig ist. Details: https://www.seelenpfote.app/#Datenschutz')
 );
 
-// -------- Begrüßungen ohne /start --------
+// ----------------- Begrüßungen ohne /start -----------------
 const greet = /^(hi|hallo|hey|servus|moin|guten\s*tag|guten\s*abend|guten\s*morgen)\b/i;
 bot.hears(greet, (ctx)=>welcome(ctx));
 
-// -------- Tierart --------
+// ----------------- Tierart -----------------
 bot.hears(/^hund$/i, async (ctx)=>{ const p=ensureProfile(ctx); p.pet='Hund'; await ctx.reply('Alles klar, ich merke mir: 🐶 *Hund*.',{parse_mode:'Markdown'});});
 bot.hears(/^katze$/i, async (ctx)=>{ const p=ensureProfile(ctx); p.pet='Katze'; await ctx.reply('Alles klar, ich merke mir: 🐱 *Katze*.',{parse_mode:'Markdown'});});
 
-// -------- Foto → Details --------
+// ----------------- Foto → Details -----------------
 bot.on('photo', async (ctx) => {
   const p = ensureProfile(ctx);
   p.lastPhotoTs = Date.now();
   p.details = {};
   setState(p,'await_details');
   await ctx.reply(
-    `Danke fürs Bild, ${p.name}. Bitte kurz:\n` +
+    `Danke fürs Bild, ${p.name}. Magst du mir kurz sagen:\n` +
     `• Seit wann?\n• Schmerzen (ja/nein)?\n• Fieber/Erbrechen?\n• Verhalten verändert?\n` +
     `${p.pet ? `(Tier: ${p.pet})` : ''}`
   );
 });
 
-// -------- Helpers --------
+// ----------------- Helper -----------------
 const weightRe = /(\d+[.,]?\d*)\s*(kg|kilo|kilogramm)\b/i;
 const ageRe    = /(\d+[.,]?\d*)\s*(jahr|jahre|j|yo|yr|yrs)\b/i;
 const sinceRe  = /seit\s+([^\n,.!]+)/i;
@@ -123,132 +123,101 @@ const parseSince  = (t)=>{ const m=t.match(sinceRe); if(m) return 'seit '+m[1].t
 const hasYes      = (t)=>/\b(ja|yes|yep|stimmt)\b/i.test(t);
 const hasNo       = (t)=>/\b(nein|no|nope|nicht)\b/i.test(t);
 
-// -------- GROßER ERSTE-HILFE-KATALOG --------
+// ----------------- Erste-Hilfe-Katalog -----------------
 const INTENTS = [
-  {
-    key: 'heatstroke',
-    regex: /(hitzschlag|überhitzt|zu\s*heiß|hechel.*extrem)/i,
-    text: `🥵 *Hitzschlag / Überhitzung*\n• Sofort in *Schatten/kühle Umgebung* bringen, Luftzufuhr\n• Pfoten/Brust *lauwarm* befeuchten (nicht eiskalt, kein Schock)\n• Trinkwasser anbieten, aber *nicht* zwangsweise einflößen\n• Körpertemp. wenn möglich messen – >40°C ist kritisch\n• *Sofort Tierarzt*, v. a. bei Apathie, Kollaps, Erbrechen, Krämpfen\n`,
-  },
-  {
-    key: 'poison',
-    regex: /(vergift|giftig|köder|rattengift|schokolade|xylit|frostschutz|pflanzenschutz|medikament.*gefressen)/i,
-    text: `☠️ *Vergiftungsverdacht*\n• *Kein* Erbrechen auslösen\n• *Verpackung/Name* des Stoffes notieren\n• Maulreste nur vorsichtig entfernen\n• Aktivkohle nur nach tierärztlicher Rücksprache\n• *Sofort Tierarzt/Notdienst* – Zeitfenster ist wichtig\n`,
-  },
-  {
-    key: 'vomiting',
-    regex: /(erbrechen|brechen|kotzen|vomit)/i,
-    text: `🤢 *Erbrechen*\n• 6–12 h Futterpause (Wasser anbieten), dann kleine leicht verdauliche Portionen\n• Bei *häufigem Erbrechen, Blut, Apathie, Fremdkörperverdacht, Welpen/Senioren* → *Tierarzt*\n• Nicht-schaumiges, einmaliges Erbrechen + gutes Allgemeinbefinden: beobachten\n`,
-  },
-  {
-    key: 'diarrhea',
-    regex: /(durchfall|diarrh)/i,
-    text: `🥣 *Durchfall*\n• Wasser bereitstellen, leicht verdauliches Futter 12–24 h in kleinen Portionen\n• Kein Fett, keine Leckerlis\n• *Blutig, apathisch, Fieber, Erbrechen* oder >24–48 h → *Tierarzt*\n`,
-  },
-  {
-    key: 'wound_limp',
-    regex: /(wunde|schnitt|platzwunde|humpel|lahm|pfote\s*auf|pfote\s*verletzt)/i,
-    text: `🩹 *Wunde / Humpeln*\n• Sanft reinigen (lauwarmes Wasser), *Druck* bei Blutung\n• Lecken verhindern (Body/Kragen), Ruhigstellen\n• Sichtbarer Fremdkörper? *Nicht tiefe* selbst entfernen; tiefe/verschmutzte Wunden → *Tierarzt*\n• Deutliche Lahmheit/Schwellung >24–48 h → *Tierarzt*\n`,
-  },
-  {
-    key: 'choking',
-    regex: /(erstick|steckt\s*fest|verschluckt|würg|atemnot|keuchen)/i,
-    text: `🫁 *Erstickungsverdacht/Fremdkörper*\n• Ruhig, Maul vorsichtig öffnen, sichtbar *lockeren* Gegenstand entfernen (kein Stechen)\n• *Keine* blinden Eingriffe tief im Hals\n• Kleine Hunde: 5x ruckartige Rücken-Schläge zwischen Schultern, abwechseln mit vorsichtigen Brustkompressionen\n• *Sofort Tierarzt*, wenn Atemnot anhält\n`,
-  },
-  {
-    key: 'seizure',
-    regex: /(krampf|krampfanfall|epileps)/i,
-    text: `⚡ *Krampfanfall*\n• Umgebung sichern, Licht dämpfen, *nicht* festhalten, *nichts* ins Maul\n• Zeit messen (>3–5 min kritisch) / Cluster?\n• Nach dem Anfall ruhig sprechen, warm halten\n• *Sofort Tierarzt* bei erstem Anfall, Anfall >3–5 min oder mehreren Anfällen\n`,
-  },
-  {
-    key: 'bloat_gdv',
-    regex: /(aufgebläht|bl[aä]hbauch|bauch\s*(groß|hart)|magendrehung|gdv)/i,
-    text: `🚨 *Magendrehung (Hund) Verdacht*\n• Symptome: aufgeblähter harter Bauch, erfolgloses Würgen, Unruhe, Speicheln\n• *Nicht* füttern/tränken, *sofort* Tierarzt/Notdienst — *zeitkritisch*\n`,
-  },
-  {
-    key: 'urinary_block',
-    regex: /(kater.*kann.*nicht.*urin|harnstau|harnverhalt|katze.*pressen.*klo)/i,
-    text: `🚨 *Harnröhrenverschluss (v. a. Kater)*\n• Häufiges Pressen ohne Urin, Schmerz, Lautäußerung, Lethargie\n• *Sofort* Tierarzt/Notdienst — *lebensbedrohlich* (Stunden zählen)\n`,
-  },
-  {
-    key: 'allergy_anaphylaxis',
-    regex: /(allerg|schwellung|gesicht\s*geschwollen|quaddeln|stich.*reaktion)/i,
-    text: `🤧 *Allergische Reaktion*\n• Mäßige Schwellung/Juckreiz: kühlende Umschläge\n• Anschwellen von Gesicht/Lippen, Atemprobleme, Kollaps → *sofort Notdienst*\n• Keine humanen Antihistaminika ohne tierärztliche Rücksprache\n`,
-  },
-  {
-    key: 'eye_injury',
-    regex: /(auge.*verletz|augenverletzung|auge.*rot|auge.*eiter|hornhaut)/i,
-    text: `👁️ *Augenverletzung/Entzündung*\n• Nicht reiben lassen, Kragen wenn nötig\n• Kein Hausmittel/Salben ohne Tierarzt (falsche Mittel schaden)\n• Licht meiden\n• *Zeitnah Tierarzt*, bei Schmerz, Eiter, Trübung, Fremdkörper\n`,
-  },
-  {
-    key: 'ear_infection',
-    regex: /(ohr.*entzündung|ohrenentzündung|ohr.*schütteln|kopfschütteln|othämatom|blutblase)/i,
-    text: `👂 *Ohrenproblem*\n• Häufig Schütteln/Jucken, übler Geruch\n• Nicht tief reinigen, nichts einträufeln ohne Diagnose\n• Blutblase (Othämatom) = tierärztlich abklären\n`,
-  },
-  {
-    key: 'tick_foxtail',
-    regex: /(zecke|grassamen|grasfahne|foxtail|fremdkörper\s*pfote|nasenloch)/i,
-    text: `🪲 *Zecke/Fremdkörper Grasfahne*\n• Zecke nahe der Haut mit Zeckenkarte/Zange *gerade* herausziehen (nicht drehen/quetschen)\n• Grasfahne in Nase/Ohr/Pfote → *Tierarzt*, nicht selbst stochern\n`,
-  },
-  {
-    key: 'burns_chemical',
-    regex: /(verbrennung|verbrannt|verätzt|chemie|s[aä]ure|laugen)/i,
-    text: `🔥 *Verbrennung/Verätzung*\n• Hitzequelle entfernen; 10–15 min *lauwarm* kühlen (nicht eiskalt)\n• Chemikalien: *lange* mit Wasser spülen, Handschutz\n• Keine Salben/Öle, steril abdecken\n• *Tierarzt*, je nach Ausmaß sofort\n`,
-  },
-  {
-    key: 'hypothermia_frost',
-    regex: /(unterk[üu]hlung|frost|erfroren|kalt\s*zitter)/i,
-    text: `🧊 *Unterkühlung/Frost*\n• Langsam aufwärmen (Decke, körpernahe Wärme), trocknen\n• Kein heißes Wasser, keine direkte Hitze\n• *Tierarzt*, v. a. bei Apathie/steifer Gang/weißen Ohren/Schwanzspitze\n`,
-  },
-  {
-    key: 'hypoglycemia',
-    regex: /(unterzucker|zuckerspiegel\s*niedrig|welpe.*schwach|zittert\s*welpe)/i,
-    text: `🍬 *Unterzucker (v. a. Welpe/Minirasse)*\n• Wenn bei Bewusstsein: etwas zuckerhaltiges *am Zahnfleisch* verreiben (Honig/Glukose)—nicht erzwingen\n• Warm halten, *Tierarzt* zur Ursache\n`,
-  },
-  {
-    key: 'insect_snake',
-    regex: /(insektenstich|wespe|biene|hornisse|schlangenbiss)/i,
-    text: `🪰 *Insektenstich / Schlangenbiss*\n• Stich: Stachel vorsichtig seitlich ausstreichen, kühlen\n• Gesicht/Kehlkopf-Schwellung, Atemprobleme → *sofort Notdienst*\n• Schlangenbiss: ruhig halten, betroffene Gliedmaße *tief lagern*, *sofort* Tierarzt — *kein* Aussaugen/Abbinden\n`,
-  },
+  { key:'heatstroke', regex:/(hitzschlag|überhitzt|ueberhitzt|zu\s*heiß|hechel.*extrem)/i,
+    text:`🥵 *Hitzschlag / Überhitzung*\n• Sofort in *Schatten/kühle Umgebung*, Luftzufuhr\n• Pfoten/Brust *lauwarm* befeuchten (nicht eiskalt)\n• Trinkwasser anbieten, aber *nicht* zwangsweise einflößen\n• >40°C kritisch\n• *Sofort Tierarzt*, v. a. bei Apathie, Kollaps, Erbrechen, Krämpfen\n`},
+  { key:'poison', regex:/(vergift|giftig|köder|koeder|rattengift|schokolade|xylit|frostschutz|pflanzenschutz|medikament.*gefressen)/i,
+    text:`☠️ *Vergiftungsverdacht*\n• *Kein* Erbrechen auslösen\n• *Verpackung/Name* des Stoffes notieren\n• Maulreste vorsichtig entfernen\n• Aktivkohle nur nach Rücksprache\n• *Sofort Tierarzt/Notdienst* – Zeitfenster wichtig\n`},
+  { key:'vomiting', regex:/(erbrechen|brechen|kotzen|vomit)/i,
+    text:`🤢 *Erbrechen*\n• 6–12 h Futterpause (Wasser anbieten), dann kleine leicht verdauliche Portionen\n• Häufig, blutig, apathisch, Fremdkörperverdacht, Welpe/Senior → *Tierarzt*\n`},
+  { key:'diarrhea', regex:/(durchfall|diarrh)/i,
+    text:`🥣 *Durchfall*\n• Wasser bereitstellen, leicht verdauliches Futter 12–24 h in kleinen Portionen\n• Kein Fett/Leckerlis\n• Blutig, Fieber, Apathie, Erbrechen oder >24–48 h → *Tierarzt*\n`},
+  { key:'wound_limp', regex:/(wunde|schnitt|platzwunde|humpel|lahm|pfote\s*auf|pfote\s*verletzt)/i,
+    text:`🩹 *Wunde / Humpeln*\n• Sanft reinigen (lauwarmes Wasser), *Druck* bei Blutung\n• Lecken verhindern (Body/Kragen), Ruhigstellen\n• Sichtbarer Fremdkörper? *Nur oberflächlich* entfernen; tiefe/verschmutzte Wunden → *Tierarzt*\n• Deutliche Lahmheit/Schwellung >24–48 h → *Tierarzt*\n`},
+  { key:'choking', regex:/(erstick|steckt\s*fest|verschluckt|würg|wuerg|atemnot|keuchen)/i,
+    text:`🫁 *Erstickungsverdacht/Fremdkörper*\n• Maul vorsichtig öffnen, *sichtbar lockeres* entfernen (nicht stechen)\n• *Keine* blinden Eingriffe tief im Hals\n• Kleine Hunde: 5x kräftige Rückenschläge zw. Schultern, abwechseln mit vors. Brustkompressionen\n• *Sofort Tierarzt* bei anhaltender Atemnot\n`},
+  { key:'seizure', regex:/(krampf|krampfanfall|epileps)/i,
+    text:`⚡ *Krampfanfall*\n• Umgebung sichern, Licht dämpfen, *nicht* festhalten, *nichts* ins Maul\n• Zeit messen (>3–5 min kritisch) / Cluster?\n• Nach dem Anfall ruhig sprechen, warm halten\n• *Sofort Tierarzt* bei erstem Anfall, >3–5 min, oder mehreren Anfällen\n`},
+  { key:'bloat_gdv', regex:/(aufgebläht|aufgeblaeht|bl[aä]hbauch|bauch\s*(groß|hart)|magendrehung|gdv)/i,
+    text:`🚨 *Magendrehung (Hund) – Verdacht*\n• Aufgeblähter harter Bauch, erfolgloses Würgen, Unruhe, Speicheln\n• *Nicht* füttern/tränken\n• *Sofort* Tierarzt/Notdienst — *zeitkritisch*\n`},
+  { key:'urinary_block', regex:/(kater.*kann.*nicht.*urin|harnstau|harnverhalt|katze.*pressen.*klo)/i,
+    text:`🚨 *Harnröhrenverschluss (v. a. Kater)*\n• Häufiges Pressen ohne Urin, Schmerz, Lautäußerung, Lethargie\n• *Sofort* Tierarzt/Notdienst — *lebensbedrohlich*\n`},
+  { key:'allergy_anaphylaxis', regex:/(allerg|schwellung|gesicht\s*geschwollen|quaddeln|stich.*reaktion)/i,
+    text:`🤧 *Allergische Reaktion*\n• Leichte Schwellung/Juckreiz: kühlen\n• Gesicht/Kehlkopf-Schwellung, Atemnot, Kollaps → *sofort Notdienst*\n• Keine Human-Antihistaminika ohne Rücksprache\n`},
+  { key:'eye_injury', regex:/(auge.*verletz|augenverletzung|auge.*rot|auge.*eiter|hornhaut)/i,
+    text:`👁️ *Augenproblem*\n• Nicht reiben lassen (Kragen), Licht meiden\n• Keine Salben/Hausmittel ohne Diagnose\n• *Zeitnah Tierarzt* bei Schmerz, Eiter, Trübung, Fremdkörper\n`},
+  { key:'ear_infection', regex:/(ohr.*entzündung|ohrenentzündung|ohr.*schütteln|kopfschütteln|othaemat|othämatom|blutblase)/i,
+    text:`👂 *Ohrproblem*\n• Häufiges Schütteln/Jucken, evtl. Geruch\n• Nicht tief reinigen, nichts einträufeln ohne Diagnose\n• Blutblase (Othämatom) tierärztlich abklären\n`},
+  { key:'tick_foxtail', regex:/(zecke|grassamen|grasfahne|foxtail|fremdkörper\s*pfote|nasenloch)/i,
+    text:`🪲 *Zecke/Fremdkörper*\n• Zecke hautnah mit Karte/Zange *gerade* herausziehen (nicht quetschen)\n• Grasfahne in Nase/Ohr/Pfote → *Tierarzt*, nicht selbst stochern\n`},
+  { key:'burns_chemical', regex:/(verbrennung|verbrannt|verätzt|veraetzt|chemie|s[aä]ure|laugen)/i,
+    text:`🔥 *Verbrennung/Verätzung*\n• Hitzequelle entfernen; 10–15 min *lauwarm* kühlen (nicht eiskalt)\n• Chemikalien: *lange* mit Wasser spülen, Handschutz\n• Keine Salben/Öle, steril abdecken\n• Je nach Ausmaß *Tierarzt* (ggf. sofort)\n`},
+  { key:'hypothermia_frost', regex:/(unterk[üu]hlung|frost|erfroren|kalt\s*zitter)/i,
+    text:`🧊 *Unterkühlung/Frost*\n• Langsam aufwärmen (Decke, Körperwärme), gut trocknen\n• Kein heißes Wasser, keine direkte Hitze\n• *Tierarzt* bei Apathie/steifer Gang/weißen Ohr- oder Schwanzspitzen\n`},
+  { key:'hypoglycemia', regex:/(unterzucker|zuckerspiegel\s*niedrig|welpe.*schwach|zittert\s*welpe)/i,
+    text:`🍬 *Unterzucker (v. a. Welpe/Minirasse)*\n• Bei Bewusstsein: etwas Honig/Glukose *am Zahnfleisch* verreiben (nicht erzwingen)\n• Warm halten, Ursache tierärztlich klären\n`},
+  { key:'insect_snake', regex:/(insektenstich|wespe|biene|hornisse|schlangenbiss)/i,
+    text:`🪰 *Insektenstich / Schlangenbiss*\n• Stich: Stachel seitlich ausstreifen, kühlen\n• Gesicht/Kehlkopf-Schwellung, Atemnot → *sofort Notdienst*\n• Schlangenbiss: ruhig halten, betroffene Gliedmaße *tief lagern*, *sofort* Tierarzt — *kein* Aussaugen/Abbinden\n`},
 ];
 
-// Antworten, wenn Nutzer „erste hilfe / nächste schritte / beobachtung“ schreibt
+const ISSUE_LABELS = {
+  'heatstroke':'Hitzschlag/Überhitzung',
+  'poison':'Vergiftung',
+  'vomiting':'Erbrechen',
+  'diarrhea':'Durchfall',
+  'wound_limp':'Wunde/Humpeln',
+  'choking':'Erstickungsverdacht',
+  'seizure':'Krampfanfall',
+  'bloat_gdv':'Magendrehung (Hund)',
+  'urinary_block':'Harnröhrenverschluss (Kater)',
+  'allergy_anaphylaxis':'Allergische Reaktion',
+  'eye_injury':'Augenproblem',
+  'ear_infection':'Ohrenproblem',
+  'tick_foxtail':'Zecke/Grasfahne',
+  'burns_chemical':'Verbrennung/Verätzung',
+  'hypothermia_frost':'Unterkühlung/Frost',
+  'hypoglycemia':'Unterzucker',
+  'insect_snake':'Insektenstich/Schlangenbiss',
+};
+
+// Erste Hilfe-Text aus Katalog
 function firstAidFor(key) {
   const item = INTENTS.find(i => i.key === key);
   return item ? item.text : null;
 }
 
-// -------- Text-Flow (FSM + Intents) --------
+// ----------------- Text-Flow (FSM + Intents) -----------------
 bot.on('text', async (ctx) => {
   const p = ensureProfile(ctx);
   const t = (ctx.message.text || '').trim();
   console.log('📥', p.state, '-', ctx.from?.username || ctx.from?.id, ':', t);
 
-  // 1) Intent-Erkennung (großer Katalog)
+  // 1) Große Themen-Erkennung → sofort Erstinfo + Profil abfragen
   for (const it of INTENTS) {
     if (it.regex.test(t)) {
       p.lastIssue = it.key;
-      setState(p, 'await_profile'); // wir wollen Basisdaten einsammeln
+      setState(p, 'await_profile');
       await ctx.reply(
         it.text +
-        `\nWenn möglich, nenn mir bitte noch *Alter, Gewicht und seit wann* – dann passe ich die nächsten Schritte besser an.`
-      );
+        `\nWenn du magst, nenn mir noch *Alter, Gewicht und seit wann* – dann kann ich gezielter helfen.`
+      , { parse_mode:'Markdown' });
       return;
     }
   }
 
-  // 2) Intent „erste hilfe / nächste schritte / beobachtung“
-  if (/(erste\s*hilfe|n[aä]chste\s*schritte|beobachtung|was\s*kann\s*ich\s*tun|hilfe\s*geben)/i.test(t)) {
+  // 2) Intent „erste hilfe / nächsten schritte / weiter / tipps / beobachtung“
+  if (/(erste\s*hilfe|n[aä]chst\w*\s*schritt\w*|weiter(gehen|e|)\b|was\s*(jetzt|tun)|tipps?|anleitung|beobachtung)/i.test(t)) {
     const txt = firstAidFor(p.lastIssue);
     if (txt) {
-      await ctx.reply(txt, { parse_mode: 'Markdown' });
-      return;
+      await ctx.reply(txt, { parse_mode:'Markdown' });
+    } else {
+      await ctx.reply(`Gern, ${p.name}. Sag mir kurz, *worum* es geht (z. B. „humpelt“, „Durchfall“, „vergiftung“, „hitzschlag“).`);
     }
-    await ctx.reply(`Gern! Schreib mir kurz, *worum* es geht (z. B. „humpelt“, „Durchfall“, „vergiftung“, „hitzschlag“) – dann bekommst du passende Schritte.`);
     return;
   }
 
-  // 3) Detail-Antworten nach Foto
+  // 3) Antworten auf Detailfragen nach Foto
   if (p.state === 'await_details') {
     p.details.since = p.details.since || parseSince(t);
     if (p.details.pain === undefined) {
@@ -262,12 +231,12 @@ bot.on('text', async (ctx) => {
       p.details.behavior = t;
     }
     setState(p,'await_profile');
-    await ctx.reply(`Danke. Jetzt bitte *Alter, Gewicht und seit wann* (z. B. „6 Jahre, 9.5 kg, seit 1 Woche“).`);
+    await ctx.reply(`Danke dir. Jetzt bitte *Alter, Gewicht und seit wann* (z. B. „6 Jahre, 9.5 kg, seit 1 Woche“).`);
     return;
   }
 
-  // 4) Alter/Gewicht/Seit-wann — auch falls state irrtümlich idle
-  if (p.state === 'await_profile' || p.state === 'idle') {
+  // 4) Alter/Gewicht/Seit-wann erkennen — auch wenn state irrtümlich idle
+  if (p.state === 'await_profile' || p.state === 'idle')) {
     const age = parseAge(t);
     const weight = parseWeight(t);
     const since = parseSince(t);
@@ -278,26 +247,27 @@ bot.on('text', async (ctx) => {
       p.details.since  = p.details.since  ?? since;
 
       setState(p,'idle');
+      const label = ISSUE_LABELS[p.lastIssue] || p.lastIssue || '—';
       await ctx.reply(
-        `Danke, ${p.name}. Zusammenfassung:\n` +
+        `Danke, ${p.name}. Ich habe verstanden:\n` +
         `${p.pet ? `• Tier: ${p.pet}\n` : ''}` +
-        `${p.lastIssue ? `• Thema: ${p.lastIssue}\n` : ''}` +
+        `${p.lastIssue ? `• Thema: ${label}\n` : ''}` +
         `${p.details.since ? `• Seit: ${p.details.since}\n` : ''}` +
         `${p.details.pain !== undefined ? `• Schmerzen: ${p.details.pain ? 'ja' : 'nein'}\n` : ''}` +
         `${p.details.feverVomiting !== undefined ? `• Fieber/Erbrechen: ${p.details.feverVomiting ? 'ja' : 'nein'}\n` : ''}` +
         `${p.details.weight ? `• Gewicht: ${p.details.weight} kg\n` : ''}` +
         `${p.details.age ? `• Alter (ca.): ${p.details.age}\n` : ''}` +
-        `\n➡️ Tippe *„erste hilfe“* oder *„nächste schritte“* für konkrete Hinweise.`
-      );
+        `\nWenn du bereit bist, schreib einfach *„erste hilfe“*, *„nächsten schritte“* oder *„was tun“* – ich führe dich liebevoll hindurch.`
+      , { parse_mode:'Markdown' });
       return;
     }
   }
 
-  // 5) Fallback
-  await ctx.reply(`Danke, ${p.name}. Wenn du magst, sag mir *Alter, Gewicht und seit wann* – dann kann ich gezielter helfen. Oder beschreibe das *Hauptproblem* (z. B. „vergiftung“, „hitzschlag“, „humpelt“, „durchfall“).`);
+  // 5) Letzter Fallback (ohne Loop)
+  await ctx.reply(`Danke, ${p.name}. Wenn du magst, sag mir *Alter, Gewicht und seit wann* – oder beschreibe das *Hauptproblem* (z. B. „vergiftung“, „hitzschlag“, „humpelt“, „durchfall“).`);
 });
 
-// -------- Start: Webhook löschen + Polling --------
+// ----------------- Start: Webhook löschen + Polling -----------------
 (async () => {
   try {
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
@@ -312,6 +282,7 @@ bot.on('text', async (ctx) => {
 })();
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 
 
 

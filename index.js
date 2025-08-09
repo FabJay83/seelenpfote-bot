@@ -1,4 +1,4 @@
-// index.js — Seelenpfote Bot (Telegraf) — Vollversion mit Webhook-Reset & Polling
+// index.js — Seelenpfote Bot (Telegraf) — robust mit Session-Fix, Error-Handling & Polling
 
 const { Telegraf, session, Markup } = require('telegraf');
 
@@ -10,9 +10,24 @@ if (!TOKEN || TOKEN.trim().length < 30) {
 }
 const bot = new Telegraf(TOKEN.trim());
 
-// --- Session: kleine Merkliste pro Nutzer ---
+// --- Safety: Fehler nie App crashen lassen ---
+bot.catch((err, ctx) => {
+  console.error('⚠️ Bot-Fehler:', err);
+});
+
+// --- Session-Absicherung (falls Middleware mal nicht greift) ---
+bot.use((ctx, next) => {
+  if (!ctx.session) ctx.session = {};
+  return next();
+});
+
+// --- Offizielle Session-Middleware ---
 bot.use(session());
+
+// --- Session-Helfer ---
 function profile(ctx) {
+  // Doppelte Absicherung
+  if (!ctx.session) ctx.session = {};
   if (!ctx.session.profile) {
     ctx.session.profile = {
       id: ctx.from?.id,
@@ -31,7 +46,7 @@ const mainKb = Markup.keyboard([
   ['📨 /kontakt', '🔒 /datenschutz']
 ]).resize();
 
-// --- Hilfsfunktion: Begrüßung ---
+// --- Begrüßung ---
 async function welcome(ctx) {
   const p = profile(ctx);
   await ctx.reply(
@@ -106,7 +121,6 @@ bot.on('photo', async (ctx) => {
 
 // --- Text: einfache Symptom-Erkennung + persönlicher Fallback ---
 bot.on('text', async (ctx, next) => {
-  // Logging jeder eingehenden Text-Nachricht (hilft beim Debuggen)
   console.log('📥 Text von', ctx.from?.username || ctx.from?.id, ':', ctx.message.text);
 
   const p = profile(ctx);
@@ -143,10 +157,10 @@ bot.on('text', async (ctx, next) => {
   return next && next();
 });
 
-// --- Start mit Webhook-Reset + Polling + Logging ---
+// --- Start: Webhook-Reset + Polling ---
 (async () => {
   try {
-    // Wichtig: vorhandenen Webhook entfernen, damit Polling Nachrichten bekommt
+    // Wichtig: Webhook löschen, damit Polling zuverlässig Nachrichten bekommt
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
 
     const me = await bot.telegram.getMe();
@@ -156,12 +170,14 @@ bot.on('text', async (ctx, next) => {
     console.log('🚀 Seelenpfote Bot läuft (Polling aktiv)');
   } catch (e) {
     console.error('❌ Startfehler:', e);
+    // nicht endlos crashen; ein Exit erlaubt Railway, neu zu starten
     process.exit(1);
   }
 })();
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 
 
 

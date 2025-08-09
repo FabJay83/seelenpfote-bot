@@ -1,18 +1,16 @@
-
 // index.js — Seelenpfote Bot (Telegraf)
 
 const { Telegraf, session, Markup } = require('telegraf');
 
-// --- 1) BOT_TOKEN prüfen ---
+// 1) BOT_TOKEN prüfen
 const TOKEN = process.env.BOT_TOKEN;
-if (!TOKEN || typeof TOKEN !== 'string' || TOKEN.trim().length < 30) {
-  console.error('❌ BOT_TOKEN fehlt oder ist ungültig. Bitte in Railway unter Variables setzen.');
+if (!TOKEN || TOKEN.trim().length < 30) {
+  console.error('❌ BOT_TOKEN fehlt oder ist ungültig. In Railway unter Variables setzen.');
   process.exit(1);
 }
-
 const bot = new Telegraf(TOKEN.trim());
 
-// --- 2) Session pro Nutzer (im RAM) ---
+// 2) Session (pro User kleine Merkliste im RAM)
 bot.use(session());
 function profile(ctx) {
   if (!ctx.session.profile) {
@@ -27,31 +25,21 @@ function profile(ctx) {
   return ctx.session.profile;
 }
 
-// --- 3) Komfort-Tastatur ---
+// 3) Komfort-Tastatur
 const mainKb = Markup.keyboard([
   ['🆘 /notfall', 'ℹ️ /hilfe'],
   ['📨 /kontakt', '🔒 /datenschutz']
 ]).resize();
 
-// --- 4) Commands & Reaktionen ---
+// 4) Commands
 bot.start(async (ctx) => {
   const p = profile(ctx);
   await ctx.reply(
-    `🐾 Hallo ${p.name}! Ich bin *Seelenpfote*.\nErzähl mir kurz, was los ist – du kannst mir auch ein *Foto* schicken.`,
+    `🐾 Hallo ${p.name}! Ich bin *Seelenpfote*.\n` +
+    `Erzähl mir kurz, was los ist – du kannst mir auch ein *Foto* schicken.`,
     { parse_mode: 'Markdown', ...mainKb }
   );
   await ctx.reply('Hast du einen *Hund* oder eine *Katze*? Antworte einfach mit „Hund“ oder „Katze“.', { parse_mode: 'Markdown' });
-});
-
-bot.hears(/^hund$/i, async (ctx) => {
-  const p = profile(ctx);
-  p.pet = 'Hund';
-  await ctx.reply('Alles klar, ich merke mir: 🐶 *Hund*.', { parse_mode: 'Markdown' });
-});
-bot.hears(/^katze$/i, async (ctx) => {
-  const p = profile(ctx);
-  p.pet = 'Katze';
-  await ctx.reply('Alles klar, ich merke mir: 🐱 *Katze*.', { parse_mode: 'Markdown' });
 });
 
 bot.command('hilfe', async (ctx) => {
@@ -59,8 +47,8 @@ bot.command('hilfe', async (ctx) => {
   await ctx.reply(
     `So nutzt du Seelenpfote, ${p.name}:\n` +
     `1) Beschreibe kurz das Problem.\n` +
-    `2) Sende Foto/Video (falls sinnvoll).\n` +
-    `3) Ich gebe dir eine *ruhige Ersteinschätzung* & nächste Schritte.\n\n` +
+    `2) Sende Foto/Video, wenn sinnvoll.\n` +
+    `3) Ich gebe dir eine *ruhige Ersteinschätzung* & klare nächste Schritte.\n\n` +
     `⚠️ Ich *ersetze keinen Tierarzt*. Bei Atemnot, starken Schmerzen, Krampfanfällen sofort Notdienst.`,
     { parse_mode: 'Markdown' }
   );
@@ -68,7 +56,7 @@ bot.command('hilfe', async (ctx) => {
 
 bot.command('notfall', async (ctx) => {
   await ctx.reply(
-    `Erste Schritte:\n` +
+    `Erste Schritte (allgemein):\n` +
     `• Blutung: sanfter Druck mit sauberem Tuch\n` +
     `• Vergiftung: *kein* Erbrechen auslösen, Verpackung merken\n` +
     `• Hitzschlag: Schatten, Pfoten/Brust kühlen (nicht eiskalt)\n` +
@@ -79,13 +67,24 @@ bot.command('notfall', async (ctx) => {
 });
 
 bot.command('kontakt', (ctx) =>
-  ctx.reply('E-Mail: info@seelenpfote.app\nInstagram: @seelenpfote.app')
+  ctx.reply('📨 E-Mail: info@seelenpfote.app\n📸 Instagram: @seelenpfote.app')
 );
 
 bot.command('datenschutz', (ctx) =>
-  ctx.reply('Kurzfassung: Ich speichere nur, was nötig ist. Details: https://www.seelenpfote.app/#Datenschutz')
+  ctx.reply('🔒 Kurzfassung: Ich speichere nur, was für die Antwort nötig ist. Details: https://www.seelenpfote.app/#Datenschutz')
 );
 
+// 5) Einfache Nutzer-Eingaben
+bot.hears(/^hund$/i, async (ctx) => {
+  const p = profile(ctx); p.pet = 'Hund';
+  await ctx.reply('Alles klar, ich merke mir: 🐶 *Hund*.', { parse_mode: 'Markdown' });
+});
+bot.hears(/^katze$/i, async (ctx) => {
+  const p = profile(ctx); p.pet = 'Katze';
+  await ctx.reply('Alles klar, ich merke mir: 🐱 *Katze*.', { parse_mode: 'Markdown' });
+});
+
+// 6) Foto erkannt → gezielte Rückfragen
 bot.on('photo', async (ctx) => {
   const p = profile(ctx);
   p.lastPhotoTs = Date.now();
@@ -96,7 +95,7 @@ bot.on('photo', async (ctx) => {
   );
 });
 
-// einfache Symptom-Keywords
+// 7) Text — einfache Symptom-Erkennung + persönlicher Fallback
 bot.on('text', async (ctx) => {
   const p = profile(ctx);
   const t = ctx.message.text || '';
@@ -104,27 +103,37 @@ bot.on('text', async (ctx) => {
   if (/durchfall|diarrh/i.test(t)) {
     p.lastIssue = 'Durchfall';
     await ctx.reply(
-      `Verstanden – *Durchfall*.\n• Flüssigkeit, leicht verdauliches Futter\n• Wenn blutig, apathisch oder >24–48h → Tierarzt\n• Welpen/Senioren schneller abklären`,
+      `Verstanden – *Durchfall*.\n` +
+      `• Flüssigkeit & leicht verdauliches Futter\n` +
+      `• Wenn blutig, apathisch oder >24–48h → Tierarzt\n` +
+      `• Welpen/Senioren schneller abklären`,
       { parse_mode: 'Markdown' }
     );
     return;
   }
+
   if (/wunde|verletz|schnitt/i.test(t)) {
     p.lastIssue = 'Wunde';
     await ctx.reply(
-      `Okay – *Wunde*.\n• Sanft reinigen (lauwarmes Wasser), Druck bei Blutung\n• Nicht lecken lassen (Kragen/Body)\n• Tiefe/verschmutzte Wunden zeitnah zum Tierarzt`,
+      `Okay – *Wunde*.\n` +
+      `• Sanft reinigen (lauwarmes Wasser), Druck bei Blutung\n` +
+      `• Nicht lecken lassen (Kragen/Body)\n` +
+      `• Tiefe/verschmutzte Wunden zeitnah zum Tierarzt`,
       { parse_mode: 'Markdown' }
     );
     return;
   }
 
-  await ctx.reply(`Danke, ${p.name}. Magst du Alter, Gewicht und seit wann das Problem besteht sagen?${p.pet ? ` (Tier: ${p.pet})` : ''}`);
+  await ctx.reply(
+    `Danke, ${p.name}. Magst du Alter, Gewicht und seit wann das Problem besteht sagen?` +
+    `${p.pet ? ` (Tier: ${p.pet})` : ''}`
+  );
 });
 
-// --- 5) Start mit Vorab-Check, sauberes Stoppen ---
+// 8) Starten (mit Vorab-Check)
 (async () => {
   try {
-    const me = await bot.telegram.getMe(); // prüft Token wirklich
+    const me = await bot.telegram.getMe();
     console.log('✅ Verbunden als @' + me.username);
     await bot.launch();
     console.log('🚀 Seelenpfote Bot läuft');
@@ -135,3 +144,4 @@ bot.on('text', async (ctx) => {
 })();
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+

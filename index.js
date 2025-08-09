@@ -1,3 +1,4 @@
+
 const { Telegraf, session, Markup } = require('telegraf');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -25,7 +26,7 @@ bot.start(async (ctx) => {
   const p = getProfile(ctx);
   await ctx.reply(
     `🐾 Hallo ${p.name}! Ich bin Seelenpfote.\nErzähl mir, was los ist – du kannst mir auch ein Foto schicken.`,
-    { ...mainKb }
+    mainKb
   );
   await ctx.reply('Hast du einen Hund oder eine Katze? Antworte einfach mit „Hund“ oder „Katze“.');
 });
@@ -58,7 +59,7 @@ bot.command('kontakt', (ctx) =>
   ctx.reply('E-Mail: info@seelenpfote.app\nInstagram: @seelenpfote.app')
 );
 bot.command('datenschutz', (ctx) =>
-  ctx.reply('Kurzfassung: Ich speichere nur, was für die Antwort nötig ist. Details: https://www.seelenpfote.app/#Datenschutz')
+  ctx.reply('Kurzfassung: Ich speichere nur, was nötig ist. Details: https://www.seelenpfote.app/#Datenschutz')
 );
 
 bot.on('photo', async (ctx) => {
@@ -74,16 +75,12 @@ bot.on('text', async (ctx) => {
   const t = ctx.message.text;
   if (/durchfall|diarrh/i.test(t)) {
     p.lastIssue = 'Durchfall';
-    await ctx.reply(
-      `Verstanden – Durchfall. Flüssigkeit, leicht verdauliches Futter; wenn blutig, apathisch oder >24–48h → Tierarzt.`
-    );
+    await ctx.reply(`Verstanden – Durchfall. Flüssigkeit & leichtes Futter; wenn blutig, apathisch oder >24–48h → Tierarzt.`);
     return;
   }
   if (/wunde|verletz|schnitt/i.test(t)) {
     p.lastIssue = 'Wunde';
-    await ctx.reply(
-      `Okay – Wunde. Sanft reinigen (lauwarmes Wasser), Druck bei Blutung, nicht lecken lassen; tiefe/verschmutzte Wunden zeitnah zum Tierarzt.`
-    );
+    await ctx.reply(`Okay – Wunde. Sanft reinigen, Druck bei Blutung, nicht lecken lassen; tiefe/verschmutzte Wunden zeitnah zum Tierarzt.`);
     return;
   }
   await ctx.reply(`Danke, ${p.name}. Magst du Alter, Gewicht und seit wann das Problem besteht sagen?${p.pet ? ` (Tier: ${p.pet})` : ''}`);

@@ -1,7 +1,7 @@
 {
   "name": "seelenpfote-bot",
-  "version": "1.3.0",
-  "description": "Seelenpfote Bot – Telegram + CLI, DE default, Auto-DE/EN, Anti-Repetition",
+  "version": "1.4.0",
+  "description": "Seelenpfote Bot – Telegram + CLI, German default, Auto-DE/EN, anti-repetition, helpful intents",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -15,4 +15,5 @@
     "node": ">=18"
   }
 }
+
 

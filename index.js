@@ -1,29 +1,26 @@
 """
 Seelenpfote – MaxPack v2 (final)
 =================================
-Ein-Datei-Variante für schnellen Rollout + lokales Testen ohne Telegram.
+Ein-Datei-Variante für schnellen Rollout + **lokales Testen ohne Telegram**.
 
 Quickstart
 ----------
-1) Abhängigkeiten (empfohlenes Minimal-Set):
-   pip install python-telegram-bot==21.4 pydantic==2.*
-   (Optional für bessere Sprachekennung): pip install langid
+1) Lokal testen (ohne Telegram, keine Zusatz-Installation nötig):
+   python app.py --cli   # interaktive Konsole
+   python app.py --selftest  # integrierte Regressionstests
 
-2) Lokal im CLI testen (ohne Telegram):
-   python app.py --cli
+2) Optional: Mit Telegram-Bot nutzen (nur, wenn Umgebung Bibliotheken zulässt):
+   pip install python-telegram-bot==21.4 pydantic==2.*  
+   (Optional Sprachekennung): pip install langid
+   TELEGRAM_BOT_TOKEN als Env setzen
+   python app.py  # startet automatisch Telegram, wenn Bibliothek & Token verfügbar sind
 
-3) Mit Telegram-Bot nutzen:
-   TELEGRAM_BOT_TOKEN als Umgebungsvariable setzen (Railway: Variables)
-   python app.py  (lokal) oder als Railway Procfile/Start-Cmd
-
-Hinweis
-------
-- Robustes State-Management (kein Wiederholungs-Loop)
-- Einfache NLU mit Negations-Erkennung ("kein/keine/nicht" etc.)
-- Automatische Sprache (DE/EN) + manueller Override per "/de" oder "/en"
-- Szenario-Bibliothek (Erste Hilfe) modular, leicht erweiterbar
-- Idempotente Antworten: gleicher Input -> keine doppelte Blockausgabe
-- Reproducible Tester + PyTest-Style Mini-Tests integrierbar
+Wichtig
+-------
+- **Kein ModuleNotFoundError mehr**: Wenn die `telegram`-Bibliothek fehlt oder kein Token gesetzt ist, startet das Skript automatisch im **CLI-Modus**.
+- Robustes State-Management → **keine Wiederholungs-Loops** (z. B. bei „kein Erbrechen“).
+- DE/EN mit Auto-Erkennung + `/de`/`/en` Override.
+- Erste-Hilfe-Blöcke modular erweiterbar.
 """
 from __future__ import annotations
 import os
@@ -404,7 +401,6 @@ def decide_and_respond(user_text: str, st: ConversationState) -> str:
         st.lang = "en"
         return "Language set to English."
 
-    lang = st.lang or detect_lang(user_text)
     # On first content, auto-detect
     st.lang = detect_lang(user_text) if not st.last_prompt_signature else st.lang
 
@@ -455,13 +451,11 @@ def decide_and_respond(user_text: str, st: ConversationState) -> str:
                 st.last_blocks.append(bid)
                 return render_block(st.lang, bid)
         # Fallback: choose by symptoms
-        # Vomiting true -> show vomiting block once
         if st.symptoms.vomiting is True:
             bid = ISSUE_TO_BLOCK[st.lang]["erbrechen" if st.lang=="de" else "vomiting"]
             if bid not in st.last_blocks:
                 st.last_blocks.append(bid)
                 return render_block(st.lang, bid)
-        # Limping hint via pain and no vomiting -> wound/limping
         if (st.symptoms.pain is True) and (st.symptoms.vomiting is not True):
             bid = ISSUE_TO_BLOCK[st.lang]["humpeln" if st.lang=="de" else "limping"]
             if bid not in st.last_blocks:
@@ -485,7 +479,18 @@ def decide_and_respond(user_text: str, st: ConversationState) -> str:
 
 # ====== Telegram glue (optional at runtime) =====================================================
 
+def telegram_available() -> bool:
+    """Check if python-telegram-bot is importable in this runtime."""
+    try:
+        from telegram import Update  # noqa: F401
+        from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 def run_telegram():
+    # Lazy import inside function; safe if library exists
     from telegram import Update
     from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -561,6 +566,31 @@ CASES = [
         ],
         "expect_not_contains": ["Erbrechen"],
     },
+    {
+        "name": "Limping block shown once (DE)",
+        "turns": [
+            "Er humpelt",
+            "erste hilfe",
+            "erste hilfe",
+        ],
+        "expect_contains": ["Wunde / Humpeln"],
+    },
+    {
+        "name": "English no-vomiting negation",
+        "turns": [
+            "My cat is limping. No vomiting.",
+            "first aid",
+        ],
+        "expect_not_contains": ["Vomiting"],
+    },
+    {
+        "name": "Paw inflamed prioritized (EN)",
+        "turns": [
+            "His paw is inflamed",
+            "next steps",
+        ],
+        "expect_contains": ["Inflamed Paw"],
+    },
 ]
 
 def selftest():
@@ -589,14 +619,26 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--cli", action="store_true", help="Run local CLI tester")
     ap.add_argument("--selftest", action="store_true", help="Run built-in regression checks")
+    ap.add_argument("--telegram", action="store_true", help="Force Telegram mode (errors if library/token missing)")
     args = ap.parse_args()
 
+    # Priority: explicit selftest/cli → then telegram if available → otherwise CLI fallback
     if args.selftest:
         selftest()
     elif args.cli:
         run_cli()
     else:
-        run_telegram()
+        token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        if (args.telegram or (token and telegram_available())):
+            try:
+                run_telegram()
+            except Exception as e:
+                print(f"[WARN] Telegram mode failed ({e}). Falling back to CLI…")
+                run_cli()
+        else:
+            print("[INFO] Telegram library or token not available – starting CLI mode.")
+            run_cli()
+
 
 
 

@@ -3,25 +3,16 @@
   "version": "1.0.0",
   "description": "Telegram-Bot für Seelenpfote – Erste Hilfe für Hund & Katze",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
-    "node-telegram-bot-api": "^0.61.0",
+    "node-telegram-bot-api": "^0.63.0",
     "openai": "^4.59.1"
   },
   "engines": {
     "node": ">=20.0.0"
   },
-  "keywords": [
-    "telegram-bot",
-    "tierhilfe",
-    "fotoanalyse",
-    "openai"
-  ],
-  "author": "FabJay83",
   "license": "MIT"
 }
-

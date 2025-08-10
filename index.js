@@ -1,8 +1,12 @@
-// index.js — Seelenpfote (Telegram) • robuste Fehlerausgabe
+// index.js — Seelenpfote (Telegram)
+// Ton: beruhigend & unterstützend – erst Fotoanalyse, dann einfühlsame Anleitung
+// Railway Vars: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY
+
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const OpenAI = require('openai');
 
+// ---- ENV (mit trim gegen unsichtbare Leerzeichen) ----
 const TELEGRAM_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const OPENAI_KEY     = (process.env.OPENAI_API_KEY || '').trim();
 
@@ -11,20 +15,28 @@ if (!TELEGRAM_TOKEN || !OPENAI_KEY) {
   process.exit(1);
 }
 
+// ---- Clients ----
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-bot.deleteWebHook({ drop_pending_updates: true }).catch(()=>{});
+// alten Webhook wegräumen (verhindert 409/Conflict)
+bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
 
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 
-// Token Selbsttest
+// sofortiger Token-Check (klare Fehlermeldung statt stiller 404-Schleife)
 bot.getMe()
   .then(me => console.log('🤖 Eingeloggt als @' + me.username))
   .catch(err => {
-    console.error('❌ Telegram-Token ungültig:', err?.response?.body || err?.message || err);
+    const msg = err?.response?.body ? JSON.stringify(err.response.body) : (err?.message || String(err));
+    console.error('❌ Telegram-Token ungültig:', msg);
     process.exit(1);
   });
 
-// Helpers
+// ---- Texte (Variante 2: beruhigend & unterstützend) ----
+const START_TEXT =
+  'Ich bin für dich da, wenn du dir Sorgen um dein Tier machst 🐕🐈\n' +
+  'Schick mir einfach ein Foto der Stelle – ich mache zuerst eine kurze Fotoanalyse 🔎\n' +
+  'und gebe dir danach eine ruhige, einfühlsame Einschätzung. 💛';
+
 function careReply({ intro, bullets = [], outro }) {
   let msg = '';
   if (intro) msg += `${intro}\n\n`;
@@ -33,50 +45,54 @@ function careReply({ intro, bullets = [], outro }) {
   return msg;
 }
 
+// ---- Helper: Telegram-Datei-URL ----
 async function getTelegramFileUrl(fileId) {
   const f = await bot.getFile(fileId);
-  const url = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${f.file_path}`;
-  return url;
+  return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${f.file_path}`;
 }
 
+// ---- Helper: OpenAI Vision Analyse ----
 async function analyzeImageUrl(imageUrl, extraPrompt = '') {
   const systemNote =
-    'Du bist eine tiermedizinische Assistenz. Liefere eine kurze, sachliche Bildbeschreibung mit möglichen Auffälligkeiten. ' +
-    'Keine Diagnose/Medikamente. Klare, neutrale Sprache.';
+    'Du bist eine tiermedizinische Assistenz. Kurze, sachliche Bildbeschreibung mit möglichen Auffälligkeiten. ' +
+    'Keine Diagnose, keine Medikamente, kein Tierarzt-Ersatz. Klare, neutrale Sprache.';
 
   const userPrompt =
     (extraPrompt?.trim() ? extraPrompt.trim() + '\n\n' : '') +
-    'Beschreibe knapp, was auf dem Foto zu sehen ist (Verletzungen/Schwellungen, Blutungen, Sekret, Haltung, Umgebung). ' +
+    'Beschreibe knapp, was auf dem Foto zu sehen ist. Falls möglich: Verletzungen/Schwellungen, Blutungen, Sekret, Haltung, Umgebung. ' +
     'Maximal 5 kurze Sätze.';
 
-  const res = await openai.responses.create({
-    model: 'gpt-4o-mini',
-    input: [
-      { role: 'system', content: [{ type: 'input_text', text: systemNote }] },
-      {
-        role: 'user',
-        content: [
-          { type: 'input_text', text: userPrompt },
-          { type: 'input_image', image_url: imageUrl },
-        ],
-      },
-    ],
-  });
-
-  return (res.output_text || '').trim();
+  try {
+    const res = await openai.responses.create({
+      model: 'gpt-4o-mini',
+      input: [
+        { role: 'system', content: [{ type: 'input_text', text: systemNote }] },
+        {
+          role: 'user',
+          content: [
+            { type: 'input_text', text: userPrompt },
+            { type: 'input_image', image_url: imageUrl },
+          ],
+        },
+      ],
+    });
+    return (res.output_text || 'Keine Analyse möglich.').trim();
+  } catch (e) {
+    const detail = e?.response?.data?.error?.message || e?.message || String(e);
+    console.error('❌ OpenAI-Fehler:', detail);
+    throw new Error('Analyse fehlgeschlagen: ' + detail);
+  }
 }
 
-// /start
+// ---- /start (ohne „Ich bin der Bot…“) ----
 bot.onText(/^\/start\b/i, async (msg) => {
   const chatId = msg.chat.id;
-  const hello =
-    'Hey 👋 ich bin dein Seelenpfote‑Bot.\n' +
-    'Schick mir ein Foto (z. B. Wunde, Haut, Pfote, Auge, Kot …).\n' +
-    'Ich mache zuerst eine kurze Fotoanalyse 🔎 und sende dir danach eine ruhige, empathische Anleitung 🐾💛';
-  await bot.sendMessage(chatId, hello);
+  await bot.sendMessage(chatId, START_TEXT).catch(err =>
+    console.error('❌ Send /start:', err?.message || err)
+  );
 });
 
-// Foto‑Flow
+// ---- Foto-Flow: erst Analyse, dann einfühlsame Antwort ----
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
@@ -87,63 +103,62 @@ bot.on('message', async (msg) => {
 
     const best = msg.photo[msg.photo.length - 1];
     const fileUrl = await getTelegramFileUrl(best.file_id);
-    console.log('📸 Telegram file URL:', fileUrl);
 
-    // 1) Analyse
-    let analysisText = '';
-    try {
-      analysisText = await analyzeImageUrl(fileUrl, 'Kontext: Tierfoto von Besitzer:in gesendet.');
-      if (!analysisText) throw new Error('Leere Analyseantwort von OpenAI.');
-      await bot.sendMessage(chatId, `🔎 *Fotoanalyse*\n${analysisText}`, { parse_mode: 'Markdown' });
-    } catch (aiErr) {
-      console.error('❌ OpenAI-Analysefehler:', aiErr?.response?.data || aiErr?.message || aiErr);
-      await bot.sendMessage(
-        chatId,
-        '⚠️ Ich konnte das Foto gerade nicht auswerten (Serverantwort fehlte oder war ungültig). ' +
-        'Bitte schick das Bild noch einmal oder ein zweites Foto aus etwas anderem Winkel.'
-      );
-      return; // empathische Antwort nur senden, wenn Analyse geklappt hat
-    }
+    // 1) Analyse (ohne Markdown, um Sonderzeichen-Probleme zu vermeiden)
+    const analysis = await analyzeImageUrl(fileUrl, 'Kontext: Tierfoto von Besitzer:in gesendet.');
+    await bot.sendMessage(chatId, `🔎 Fotoanalyse\n${analysis}`)
+      .catch(err => console.error('❌ Send analysis:', err?.response?.body || err?.message || err));
 
-    // 2) Empathie
-    const friendly = careReply({
-      intro: 'Ich weiß, das kann belastend sein – ich bin bei dir 🐾❤️\nDamit ich dir gezielt helfen kann, schreib mir bitte kurz:',
+    // 2) Einfühlsame Nachfrage / Struktur
+    const reply = careReply({
+      intro:
+        'Danke dir fürs Foto. Ich weiß, solche Momente sind nicht leicht – wir gehen das gemeinsam ruhig an 💛\n' +
+        'Damit ich dir gezielt helfen kann, schreib mir bitte kurz:',
       bullets: [
-        '🐶 Wo ist die Stelle genau? (Pfote, Bein, Auge, Bauch …)',
+        '🐾 Wo genau ist die Stelle? (Pfote, Bein, Auge, Bauch …)',
         '📏 Ungefähr wie groß? Wirkt sie rot, geschwollen oder feucht?',
-        '🧭 Seit wann? Wird es besser oder schlimmer?',
+        '⏱️ Seit wann? Wird es besser oder schlimmer?',
         '⚠️ Leckt/kratzt dein Tier daran? Gibt es Geruch oder Sekret?',
       ],
-      outro: 'Schick mir 1–2 Punkte – ich leite dich Schritt für Schritt an. Du machst das super 💪\nIch bleibe hier, bis wir es geschafft haben.',
+      outro:
+        'Schick mir 1–2 Punkte – ich leite dich Schritt für Schritt an. Du machst das gut, ich bleibe hier bei dir. 🐾',
     });
-    await bot.sendMessage(chatId, friendly);
+
+    await bot.sendMessage(chatId, reply)
+      .catch(err => console.error('❌ Send reply:', err?.response?.body || err?.message || err));
   } catch (err) {
-    console.error('❌ Foto-Flow Fehler (außen):', err?.message || err);
-    await bot.sendMessage(chatId, '⚠️ Uff, da ist gerade etwas schiefgelaufen. Versuch es bitte kurz nochmal – ich bleibe hier.');
+    console.error('❌ Foto-Flow Fehler:', err?.message || err);
+    await bot.sendMessage(chatId, '⚠️ Da ist gerade etwas schiefgelaufen bei der Fotoanalyse. Bitte versuch es gleich nochmal.')
+      .catch(e => console.error('❌ Send fallback:', e?.message || e));
   }
 });
 
-// Text‑Fallback
+// ---- Text-Flow (wenn kein Foto) ----
 bot.on('text', async (msg) => {
   if (/^\/start\b/i.test(msg.text)) return;
   if (msg.photo && msg.photo.length) return;
 
   const chatId = msg.chat.id;
   const askForPhoto = careReply({
-    intro: 'Danke für deine Nachricht 🙏\nWenn möglich, schick mir bitte ein *Foto* oder beschreibe die Stelle kurz.',
+    intro:
+      'Danke für deine Nachricht 🙏\n' +
+      'Wenn möglich, schick mir bitte ein *Foto* der Stelle – das hilft mir, dir schnell und einfühlsam zu antworten.',
     bullets: [
       '🐾 Körperstelle (Pfote, Bein, Auge …)',
       '📏 Größe ungefähr',
       '⏱️ Seit wann?',
       '⚠️ Auffälligkeiten (rot, geschwollen, feucht, Geruch …)',
     ],
-    outro: 'Mit einem Foto kann ich zuerst eine kurze Analyse machen und dir danach konkrete Schritte geben 💛',
+    outro:
+      'Mit einem Foto kann ich zuerst eine kurze Analyse machen und dir danach konkrete, ruhige Schritte geben. 💛',
   });
 
-  await bot.sendMessage(chatId, askForPhoto, { parse_mode: 'Markdown' });
+  await bot.sendMessage(chatId, askForPhoto, { parse_mode: 'Markdown' })
+    .catch(err => console.error('❌ Send askForPhoto:', err?.response?.body || err?.message || err));
 });
 
 console.log('✅ Bot läuft…');
+
 
 
 

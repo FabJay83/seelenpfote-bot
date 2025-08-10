@@ -1,4 +1,4 @@
-// index.js — Seelenpfote Bot (All‑in‑One, 18 Fälle, FIXED switching + no repeat)
+// index.js — Seelenpfote Bot (All‑in‑One, Notfälle sofort)
 // Telegram + CLI, DE default, Auto‑DE/EN, Zustandsmaschine, Foto‑Handling, Anti‑Repeat
 require('dotenv').config();
 
@@ -58,120 +58,149 @@ const TXT = {
   }
 };
 
-/* ---------- Case Engine (18 Fälle) ---------- */
-/* Jedes Case: {id, match(text,lang), start(text,s,L), step(text,s,L), photo?(s,L)}
-   WICHTIG: Nach der finalen Antwort setzen die Cases s.state.name = null (schließt Fall),
-   damit es keine Wiederholungen gibt und Themenwechsel sofort greifen. */
+/* ---------- Cases (18) ---------- */
+/* Struktur: {id, emergency:boolean, match(text,lang), start(text,s,L), step(text,s,L), photo?()} */
+/* Notfälle: emergency=true → sofortige Antwort + state reset */
 
 const CASES = [
-/* 1) Pfote/Wunde/Schwellung */
-{ id:'paw',
+/* 1) Pfote/Wunde/Schwellung (nicht Notfall) */
+{ id:'paw', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en' ? (/(paw|pad|nail)/.test(s)&&/(inflam|red|swoll|wound|pus|cut|crack)/.test(s)) : (/(pfote|ballen|kralle)/.test(s)&&/(entzünd|rot|schwell|wund|eiter|schnitt|riss)/.test(s));},
   start:(text,s,L)=>{s.state.step=1;return`Pfote/Wunde – Erste Hilfe:\n• Mit lauwarmem Wasser/NaCl spülen, sanft trocken tupfen.\n• Lecken verhindern (Socke/Schuh/Halskragen).\n• 10–15 Min. kühlen (Tuch, kein Eis direkt).\nFragen:\n1) Seit wann?\n2) Lahmt stark/leicht?\n3) Schnitt/Fremdkörper sichtbar? (ja/nein)\n(Optional: Foto senden)`;},
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text;if(s.state.step===1){s.state.step=2;const t=s.state.data.text;const long=/(tage|woche|seit.*tag|seit.*woche)/i.test(t);const strong=/(gar nicht|kaum|stark|nicht belastet)/i.test(t);const foreignNo=/\bnein\b/i.test(t);const final=`Einschätzung:\n• ${long?'Seit mehreren Tagen':'Eher frisch'}${strong?' + deutliche Lahmheit':''}.\n• ${foreignNo?'Kein sichtbarer Fremdkörper.':'Zwischen Ballen auf Schnitt/Splitter prüfen.'}\nNächste Schritte:\n1) 2–3×/Tag spülen, trocken tupfen; Lecken verhindern.\n2) 10–15 Min. kühlen, 2–3×/Tag.\n3) Schonung/kurze Gassi‑Runden.\n4) ${long||strong?'Tierarzt innerhalb 24 h.':'Keine Besserung in 24–48 h → Tierarzt.'}`; s.state.name=null; return final;}return"Kurzes Update: besser/schlechter? (Foto möglich)";},
   photo:(s,L)=>L.photoReceived },
-/* 2) Durchfall */
-{ id:'diarrhea',
+
+/* ---------- NOTFÄLLE ab hier: sofortige Antwort ---------- */
+
+/* 2) Hitzschlag / Überhitzung */
+{ id:'heat', emergency:true,
+  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(heatstroke|overheat|overheated|hot car|panting heavily)/.test(s):/(hitzschlag|hitzeschlag|überhitz|heißes auto|starkes hecheln|überwärmt)/.test(s);},
+  start:(text,s,L)=>{ s.state.name=null; return (
+`⚠️ **Hitzschlag – jetzt handeln:**
+1) In Schatten/kühlen Raum; Ventilator wenn möglich.
+2) Mit *kühlem* (nicht eiskaltem) Wasser befeuchten – Bauch/Leisten.
+3) Frisches Wasser in kleinen Mengen anbieten.
+4) **Sofort Tierarzt anrufen** und Ankunft ankündigen. 
+5) Wenn taumelt/erbricht/kollabiert → **direkt losfahren**.`);},
+  step:()=>{return "Bitte jetzt sofort handeln – schreib danach ein Update.";}},
+/* 3) Starke Blutung / Blutung unklar */
+{ id:'bleeding', emergency:true,
+  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(bleeding|bleeds a lot|spurting blood|severe cut)/.test(s):/(starke blutung|blutet stark|spritzend|pulsierend|tiefe schnitt|platzwunde)/.test(s) || /(blutung|blutet|schnitt|platzwunde|offene wunde)/.test(s);},
+  start:(text,s,L)=>{ s.state.name=null; return (
+`⚠️ **Blutung – Sofortmaßnahmen:**
+1) **Druckverband** anlegen (Gaze/Tuch) und **5–10 Min. nicht lösen**.
+2) Falls möglich, verletzte Stelle leicht hochlagern.
+3) Ruhig + warm halten – nichts in die Wunde füllen.
+4) **Umgehend Tierarzt/Notdienst** aufsuchen.`);},
+  step:()=> "Halte den Druckverband – wenn die Blutung nicht stoppt: sofort losfahren." },
+/* 4) Vergiftung */
+{ id:'poison', emergency:true,
+  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(poison|toxin|ate rat poison|chocolate|xylitol|ibuprofen|grapes|rosins)/.test(s):/(vergift|gift|rattenköder|schokolade|xylit|ibuprofen|trauben|rosinen)/.test(s);},
+  start:(text,s,L)=>{ s.state.name=null; return (
+`⚠️ **Vergiftungsverdacht:**
+1) **Nichts** einflößen, **kein** Erbrechen erzwingen.
+2) Verpackung/Foto vom Stoff sichern.
+3) **Sofort** Tierarzt/Notdienst anrufen (Stoff, Menge, Zeit, Gewicht nennen).
+4) Bei Taumeln/Krämpfen → **ohne Verzögerung losfahren**.`);},
+  step:()=> "Bitte jetzt den Tierarzt anrufen. Ich bleibe hier für Rückfragen." },
+/* 5) Aufgeblähter Bauch / GDV */
+{ id:'bloat', emergency:true,
+  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(bloat|gdv|swollen belly|retches but nothing)/.test(s):/(aufgeblähter bauch|magenumdrehung|magen\-torsion|würgen ohne erbrechen)/.test(s);},
+  start:()=>{ return "⚠️ **Verdacht auf Magendrehung**: harter Bauch, Würgen ohne Erbrechen, Unruhe/Schmerz.\n→ **Sofort** Notdienst/Tierklinik – keine Zeit verlieren!"; },
+  step:()=> "Bitte direkt in die Tierklinik fahren." },
+/* 6) Krampfanfall */
+{ id:'seizure', emergency:true,
+  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(seizure|convulsion|fits|epilepsy)/.test(s):/(krampf|krampfanfall|epilepsie|anfälle)/.test(s);},
+  start:()=>{ return (
+`⚠️ **Krampfanfall – jetzt:**
+1) Verletzungen vermeiden, nicht festhalten; Kopf seitlich lagern.
+2) Zeit messen; Umgebung abdunkeln.
+3) Nach dem Anfall: ruhig halten, nichts füttern.
+4) **Notdienst kontaktieren**, besonders >5 Min., mehrere Anfälle oder keine Erholung.`);},
+  step:()=> "Wenn der Anfall >5 Min. dauert oder direkt wiederkommt → Notdienst sofort." },
+/* 7) Harnblockade / „kann nicht pinkeln“ */
+{ id:'urine', emergency:true,
+  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(can'?t pee|cannot pee|no urine|straining no urine)/.test(s):/(kann nicht pinkeln|kein urin|strengt sich an und es kommt nichts)/.test(s) || /(urin|pinkelt|strengt sich an)/.test(s);},
+  start:()=>{ return (
+`⚠️ **Harnabfluss gestört** (möglicher Notfall):
+1) Nicht warten – **sofort Tierarzt/Notdienst** (Gefahr Vergiftung durch Harnstau).
+2) Ruhig halten, Wasser anbieten – nicht forcieren.
+3) Wenn Schmerzen/Unruhe → direkt losfahren.`);},
+  step:()=> "Bitte fahre jetzt los – Harnblockaden können schnell gefährlich werden." },
+/* 8) Knochenbruch/Trauma */
+{ id:'fracture', emergency:true
+  ,match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(fracture|broken bone|broken leg|severe trauma|hit by car)/.test(s):/(bruch|knochenbruch|bein gebrochen|schweres trauma|autounfall)/.test(s);},
+  start:()=>{ return (
+`⚠️ **Verdacht auf Bruch/Trauma:**
+1) Tier ruhig halten, nicht selbst „einrenken“.
+2) Provisorische Schiene nur wenn sicher; sonst Polsterung.
+3) **Sofort** Tierarzt/Notdienst (Röntgen, Schmerztherapie).`);},
+  step:()=> "Bitte direkt zum Tierarzt/Notdienst fahren." },
+
+/* ---------- Nicht-Notfälle (Dialog) ---------- */
+/* 9) Durchfall */
+{ id:'diarrhea', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en' ? /(diarrhea|loose stool|watery stool|bloody stool)/.test(s) : /(durchfall|dünn|wässrig|breiig|blut im stuhl)/.test(s);},
   start:(text,s,L)=>{s.state.step=1;return`Durchfall – Fragen:\n1) Seit wann?\n2) Appetit/Trinken? (ja/nein)\n3) Blut/Schleim? (ja/nein)\n4) Zustand? (munter/müde)\n(Optional: Foto vom Kot)`;},
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text;if(s.state.step===1){s.state.step=2;const t=s.state.data.text;const long=/(48|zwei tage|2 tage|seit.*tagen)/i.test(t);const bloody=/\b(blut|blutig|schleim)\b/i.test(t);const leth=/\b(müde|apathisch|schwach)\b/i.test(t);const nodrink=/(trinkt nicht|kein wasser|trinkt kaum)/i.test(t);const alarm=long||bloody||leth||nodrink;const final=`Einschätzung:\n• ${alarm?'Warnzeichen vorhanden.':'Leichter/mäßiger Durchfall.'}\nNächste Schritte:\n1) 6–12 h Schonkostpause (Wasser anbieten).\n2) Danach kleine Portionen: Reis+Huhn oder Morosuppe.\n3) Elektrolytlösung (Tierbedarf).\n4) ${alarm?'Heute noch Tierarzt kontaktieren.':'Keine Besserung in 24–36 h → Tierarzt.'}\n⚠️ Welpen/Senioren/Vorerkrankungen → früher abklären.`; s.state.name=null; return final;}return"Sag Bescheid, falls Blut, Schwäche oder keine Besserung.";},
   photo:(s,L)=>L.photoReceived },
-/* 3) Erbrechen */
-{ id:'vomit',
+/* 10) Erbrechen */
+{ id:'vomit', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en' ? /(vomit|throwing up|nausea|bile|foam)/.test(s) : /(erbroch|kotz|brechen|übelkeit|galle|schaum)/.test(s);},
   start:(text,s,L)=>{s.state.step=1;return`Erbrechen – Fragen:\n1) Wie oft/12 h?\n2) Futter/Galle/Schaum? Blut?\n3) Hält Wasser? (ja/nein)\n4) Zustand? (munter/müde)\n(Optional: Foto)`;},
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text;if(s.state.step===1){s.state.step=2;const t=s.state.data.text;const many=/(3|drei|mehrfach|oft|häufig)/i.test(t);const blood=/\b(blut|rötlich)\b/i.test(t);const nowater=/(hält.*nicht|erbricht wasser|trinkt nicht)/i.test(t);const leth=/\b(müde|apathisch|schwach)\b/i.test(t);const alarm=many||blood||nowater||leth;const final=`Einschätzung:\n• ${alarm?'Warnzeichen vorhanden.':'Wahrscheinlich gereizter Magen.'}\nNächste Schritte:\n1) 6–12 h Futterpause (Wasser in kleinen Mengen, häufig).\n2) Danach Miniportionen Schonkost (Huhn/Reis/Morosuppe).\n3) Bauchschmerz/Aufblähung/Fremdkörper?\n4) ${alarm?'Heute noch Tierarzt.':'Keine Besserung in 24 h → Tierarzt.'}`; s.state.name=null; return final;}return"Gib ein Update, ob es besser wird.";},
   photo:(s,L)=>L.photoReceived },
-/* 4) Humpeln/Lahmheit */
-{ id:'limp',
+/* 11) Humpeln/Lahmheit */
+{ id:'limp', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en' ? /(limp|lameness|not weight-bearing|favoring leg)/.test(s) : /(humpel|lahm|zieht bein|belastet nicht|lahmt)/.test(s);},
   start:(text,s,L)=>{s.state.step=1;return`Humpeln – Fragen:\n1) Seit wann?\n2) Belastet gar nicht/wenig?\n3) Schwellung/Verletzung? (ja/nein)\n4) Unfall/Sturz? (ja/nein)\n(Optional: Foto/kurzes Video)`;},
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text;if(s.state.step===1){s.state.step=2;const t=s.state.data.text;const sinceDays=/(tage|seit.*tag|woche)/i.test(t);const noWeight=/(gar nicht|nicht belastet|trägt nicht)/i.test(t);const swelling=/(schwell|dick|heiß|warm)/i.test(t);const accident=/(unfall|sturz|zerrung|umgeknickt)/i.test(t);const alarm=noWeight||swelling||accident||sinceDays;const final=`Einschätzung:\n• ${noWeight?'Nicht‑Belasten = Warnzeichen.':(sinceDays?'>24–48 h bestehend.':'Leichte Lahmheit möglich.')}\nNächste Schritte:\n1) Schonung, keine Treppen/Wildspiele.\n2) Kühlen 10–15 Min., 2–3×/Tag (Tuch, kein Eis direkt).\n3) Kurze ruhige Runden.\n4) ${alarm?'Tierarzt innerhalb 24 h.':'Keine Besserung → Tierarzt.'}`; s.state.name=null; return final;}return"Kurzes Update, bitte.";},
   photo:(s,L)=>L.photoReceived },
-/* 5) Blutung/Schnitt */
-{ id:'bleeding',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(bleeding|cut|laceration|open wound)/.test(s):/(blutung|blutet|schnitt|platzwunde|offene wunde)/.test(s);},
-  start:(text,s,L)=>{s.state.step=1;return`Blutung/Schnitt – Erste Hilfe:\n• Druckverband 5–10 Min. ohne Unterbrechung.\n• Tiefe Wunden nicht spülen (nur Ränder säubern).\n• Wenn möglich, hochlagern.\nFragen:\n1) Blutung stark/mittel/leicht?\n2) Tiefe klaffende Wunde? (ja/nein)\n3) Ort der Wunde?`},
-  step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text;if(s.state.step===1){s.state.step=2;const t=s.state.data.text;const heavy=/(stark|pulsierend|spritzend)/i.test(t);const deep=/(tief|sehne|knochen|klaffend)/i.test(t);const final=`Einschätzung:\n• ${heavy?'Starke Blutung':'Keine starke Blutung'}${deep?' + tiefe Wunde.':'.'}\nNächste Schritte:\n1) Druckverband belassen/erneuern.\n2) Ruhig + warm halten.\n3) ${heavy||deep?'Bitte umgehend Tierarzt/Notdienst.':'Unsicher/weiter blutend → Tierarzt heute.'}`; s.state.name=null; return final;}return"Stoppt der Druckverband die Blutung?";},
-  photo:(s,L)=>L.photoReceived },
-/* 6) Hitzschlag */
-{ id:'heat',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(heatstroke|overheat|overheated|hot car|panting heavily)/.test(s):/(hitzschlag|überhitz|heißes auto|starkes hecheln|überwärmt)/.test(s);},
-  start:(text,s,L)=>{s.state.step=1;return`Überhitzung – Sofort:\n• In Schatten/kühlen Raum.\n• Mit kühlem (nicht eiskaltem) Wasser befeuchten, Ventilator.\n• Wasser anbieten (kleine Mengen).\nFragen:\n1) Ansprechbar? (ja/nein)\n2) Taumelt/erbricht? (ja/nein)\n3) Wie lange Hitze ausgesetzt?`},
-  step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===1){s.state.step=2;const t=s.state.data.text;const collapse=/(ohnmacht|bewusstlos|nicht ansprechbar|taumelt)/i.test(t);const vomit=/(erbricht|kotzt)/i.test(t);const final=`Weitere Schritte:\n1) Weiter langsam kühlen.\n2) Kein eiskaltes Wasser.\n3) Sofort Tierarzt anrufen/ankündigen.\n4) ${collapse||vomit?'Akut: direkt losfahren.':'Auch ohne Kollaps zeitnah vorstellen.'}`; s.state.name=null; return final;} return"Bitte fahr los, wenn keine schnelle Besserung.";}},
-/* 7) Vergiftung */
-{ id:'poison',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(poison|toxin|ate rat poison|chocolate|xylitol|ibuprofen|grapes)/.test(s):/(vergift|gift|rattenköder|schokolade|xylit|ibuprofen|trauben|rosinen)/.test(s);},
-  start:(text,s,L)=>{s.state.step=1;return`Vergiftungsverdacht:\n• Nichts selbst einflößen/kein Erbrechen erzwingen.\n• Verpackung/Foto sichern.\nFragen:\n1) Was/Menge/seit wann?\n2) Symptome? (erbricht, wackelig, Krämpfe)\n3) Gewicht des Hundes?`},
-  step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===1){s.state.step=2; const final=`Maßnahmen:\n1) Sofort Tierarzt/Notdienst anrufen.\n2) Stoff/Menge/Zeit nennen, Verpackung mitnehmen.\n3) Bei Neurologie‑Symptomen keine Zeit verlieren.`; s.state.name=null; return final;} return"Bitte jetzt den Tierarzt kontaktieren – ich bin hier, falls Fragen auftauchen.";}},
-/* 8) Aufgeblähter Bauch / GDV */
-{ id:'bloat',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(bloat|gdv|swollen belly|retches but nothing)/.test(s):/(aufgeblähter bauch|magenumdrehung|magen\-torsion|würgen ohne erbrechen)/.test(s);},
-  start:()=>{return`⚠️ Verdacht auf Magendrehung: harter Bauch, Würgen ohne Erbrechen, starke Unruhe/Schmerz.\n→ **Sofort** Notdienst/Tierklinik!`;},
-  step:()=>{return`Bitte direkt in die Tierklinik fahren.`;} },
-/* 9) Krampfanfall */
-{ id:'seizure',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(seizure|convulsion|fits|epilepsy)/.test(s):/(krampf|krampfanfall|epilepsie|anfälle)/.test(s);},
-  start:()=>`Krampfanfall – Sofort:\n• Verletzungen vermeiden, nicht festhalten, Kopf seitlich.\n• Zeit messen.\n• Danach: ruhiger dunkler Raum, nichts füttern.\nFragen: Dauer? Mehrere Anfälle? Wieder ansprechbar?`,
-  step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const long=/(>?\s*5\s*min|fünf|minuten|>5)/i.test(t); const cluster=/(mehrere|hintereinander|cluster)/i.test(t); const notok=/(nicht ansprechbar|apathisch|lang anhaltend)/i.test(t); const final=`Einschätzung:\n• ${long||cluster||notok?'Notfallverdacht.':'Abklären lassen.'}\nNächste Schritte:\n1) ${long||cluster||notok?'Sofort Notdienst.':'Tierarzttermin zeitnah.'}\n2) Falls möglich Video/Uhrzeiten notieren.`; s.state.name=null; return final;} },
-/* 10) Auge */
-{ id:'eye',
+/* 12) Auge */
+{ id:'eye', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(eye|ocular|red eye|squint|discharge)/.test(s):/(auge|augen|augenlid|rot|blinzelt|ausfluss)/.test(s);},
   start:()=>`Auge – Erste Hilfe:\n• Nicht reiben lassen, ggf. Halskragen.\n• Keine Menschen‑Augentropfen.\n• ggf. NaCl‑Spülung bei Fremdkörperverdacht.\nFragen: stark rot/schmerz? Lichtempfindlich? Verletzung sichtbar? (Foto möglich)`,
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const severe=/(stark|sehr|verletz|fremdkörper|trüb|blut)/i.test(t); const final=`Nächste Schritte:\n1) ${severe?'Heute noch':'Zeitnah'} Tierarzt (Hornhaut kann schmerzhaft sein).\n2) Nicht reiben; ggf. Halskragen.\n3) Foto/Video hilft.`; s.state.name=null; return final;},
   photo:(s,L)=>L.photoReceived },
-/* 11) Ohrentzündung */
-{ id:'ear',
+/* 13) Ohr */
+{ id:'ear', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(ear|otitis|shaking head|scratching ear|ear discharge)/.test(s):/(ohr|ohren|ohrenentzündung|kopfschütteln|kratzt ohr|ohr ausfluss)/.test(s);},
   start:()=>`Ohr – Erste Hilfe:\n• Nicht mit Wattestäbchen tief reinigen.\n• Ohr trocken halten, Kratzen vermeiden.\nFragen: Rötung/Schwellung/Geruch? Schmerz? Seit wann? (Foto möglich)`,
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const severe=/(stark|eitrig|geruch|sehr rot|schmerz)/i.test(t); const final=`Nächste Schritte:\n1) ${severe?'Heute noch':'Zeitnah'} Tierarzt zur Reinigung/Medikation.\n2) Bis dahin Kratzen vermeiden, Ohr trocken halten.\n3) Keine Hausmittel tief ins Ohr.`; s.state.name=null; return final;},
   photo:(s,L)=>L.photoReceived },
-/* 12) Zecke/Stich/Allergie */
-{ id:'tick',
+/* 14) Zecke/Stich/Allergie (kein echter Notfall, aber klare Schritte) */
+{ id:'tick', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(tick|bee sting|wasp sting|allergic reaction|hives)/.test(s):/(zecke|stich|wespe|biene|allergie|quaddeln)/.test(s);},
   start:()=>`Zecke/Stich:\n• Zecke mit Zange nahe der Haut greifen, langsam ziehen; keine Öle.\n• Stich kühlen, Ruhe.\nFragen: Gesicht/Zunge geschwollen? Atemprobleme? Seit wann? (Foto möglich)`,
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const face=/(gesicht|zunge|augenlid|maul)/i.test(t); const breath=/(atemnot|keucht|schlecht luft)/i.test(t); const final=`Nächste Schritte:\n1) Kühlen, Ruhe.\n2) ${face||breath?'Sofort Tierarzt/Notdienst.':'Beobachten; starke Schwellung/Schwäche → Tierarzt.'}\n3) Nach Zecke: Stelle täglich sichten; Fieber/Trägheit → abklären.`; s.state.name=null; return final;},
   photo:(s,L)=>L.photoReceived },
-/* 13) Husten/Atemwege */
-{ id:'cough',
+/* 15) Husten/Atemwege */
+{ id:'cough', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(cough|kennel cough|trachea|honking|breath|breathing)/.test(s):/(husten|zwingerhusten|trachea|würgen|atem|pfeift|keucht)/.test(s);},
   start:()=>`Husten/Atemwege – Fragen:\n1) Seit wann? Fieber?\n2) Husten trocken/feucht? Würgen?\n3) Atemnot (Maul offen, blaue Zunge), kollabiert? (ja/nein)`,
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const distress=/(atemnot|keucht|maul offen|blaue zunge|kollabiert)/i.test(t); const final=`Einschätzung & Schritte:\n1) ${distress?'Akut: sofort':'Zeitnah'} Tierarzt, besonders bei Atemnot.\n2) Ruhe, Zugluft vermeiden, Geschirr statt Halsband.\n3) Trinken anbieten, Anstrengung vermeiden.`; s.state.name=null; return final;}},
-/* 14) Appetitlosigkeit */
-{ id:'anorexia',
+/* 16) Appetitlosigkeit */
+{ id:'anorexia', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(no appetite|not eating|refuses food|stopped eating)/.test(s):/(appetitlos|frisst nicht|frisst kaum|futter verweigert)/.test(s);},
   start:()=>`Appetitlosigkeit – Fragen:\n1) Seit wann?\n2) Trinkt normal? (ja/nein)\n3) Begleitend: Erbrechen/Durchfall/Fieber/Schmerz?`,
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const long=/(tage|seit.*tag|woche)/i.test(t); const alarm=/(erbricht|durchfall|fieber|schmerz|apathisch)/i.test(t); const final=`Schritte:\n1) Wasser anbieten, Futter leicht erwärmen, sehr kleine Portionen.\n2) ${alarm||long?'Heute noch Tierarzt':'Wenn keine Besserung <24–48 h → Tierarzt'}.\n3) Beobachten: Trinken/Urin/Schmerzen.`; s.state.name=null; return final;}},
-/* 15) Harnprobleme */
-{ id:'urine',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(urine|peeing|straining|blood in urine|can\'t pee)/.test(s):/(urin|pinkelt|strengt sich an|blut im urin|kann nicht pinkeln)/.test(s);},
-  start:()=>`Harnprobleme – Fragen:\n1) Strengt er sich an, ohne dass etwas kommt? (ja/nein)\n2) Blut im Urin? (ja/nein)\n3) Schmerzen/Unruhe? (ja/nein)`,
-  step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const block=/(kann nicht|nix kommt|ohne erfolg|sehr wenig)/i.test(t); const blood=/\b(blut)\b/i.test(t); const final=`Einschätzung:\n• ${block?'Harnabfluss gestört (Notfall möglich).':'Reizung/Entzündung möglich.'}\nSchritte:\n1) ${block?'Sofort Tierarzt/Notdienst.':'Zeitnah Tierarzt (Urinprobe hilfreich).'}\n2) Viel Wasser anbieten, Ruhe.`; s.state.name=null; return final;}},
-/* 16) Verstopfung */
-{ id:'constipation',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(constipation|hard stool|straining to poop)/.test(s):/(verstopfung|harte kot|drückt ohne erfolg)/.test(s);},
+/* 17) Verstopfung */
+{ id:'constipation', emergency:false
+  ,match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(constipation|hard stool|straining to poop)/.test(s):/(verstopfung|harte kot|drückt ohne erfolg)/.test(s);},
   start:()=>`Verstopfung – Fragen:\n1) Seit wann?\n2) Frisst/Trinkt normal? (ja/nein)\n3) Schmerz, Aufblähung, Erbrechen? (ja/nein)`,
   step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const long=/(tage|seit.*tag|woche)/i.test(t); const alarm=/(starke schmerzen|aufgebläht|erbricht)/i.test(t); const final=`Schritte:\n1) Wasser anbieten, kurze entspannte Spaziergänge.\n2) Leichte Kost, ggf. etwas Öl/Morosuppe.\n3) ${alarm||long?'Tierarzt (Darmverschluss ausschließen).':'Wenn keine Besserung 24–48 h → Tierarzt.'}`; s.state.name=null; return final;}},
-/* 17) Zahn/Zahnfleisch */
-{ id:'tooth',
+/* 18) Zahn/Zahnfleisch */
+{ id:'tooth', emergency:false,
   match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(tooth|teeth|gum|broken tooth|tooth pain)/.test(s):/(zahn|zähne|zahnfleisch|zahnbruch|zahnschmerz)/.test(s);},
   start:()=>`Zahn/Zahnfleisch – Fragen:\n1) Abgebrochener Zahn sichtbar? (ja/nein)\n2) Blutung/übel riechender Mund? (ja/nein)\n3) Frisst er schlechter? (ja/nein)`,
-  step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const broken=/(abgebrochen|bruch|splitter)/i.test(t); const bleedSmell=/(blutet|geruch)/i.test(t); const final=`Schritte:\n1) Weiche Kost, nichts Hartes kauen lassen.\n2) ${broken||bleedSmell?'Heute noch':'Zeitnah'} Tierarzt/Zahnröntgen.\n3) Schmerzen/Schwellung → schneller Termin.`; s.state.name=null; return final;}},
-/* 18) Knochenbruch/Trauma */
-{ id:'fracture',
-  match:(t,lang)=>{const s=t.toLowerCase();return lang==='en'?/(fracture|broken bone|broken leg|severe trauma|hit by car)/.test(s):/(bruch|knochenbruch|bein gebrochen|schweres trauma|autounfall)/.test(s);},
-  start:()=>`⚠️ Verdacht auf Bruch/Trauma:\n• Ruhig halten, nicht selbst reponieren.\n• Schiene nur wenn sicher; Schmerz schonen.\n→ **Sofort** Tierarzt/Notdienst (Röntgen).`,
-  step:()=>{return`Bitte sofort zum Tierarzt/Notdienst fahren.`;}}
+  step:(text,s,L)=>{s.state.data.text=(s.state.data.text||'')+' '+text; if(s.state.step===0)s.state.step=1; const t=s.state.data.text; const broken=/(abgebrochen|bruch|splitter)/i.test(t); const bleedSmell=/(blutet|geruch)/i.test(t); const final=`Schritte:\n1) Weiche Kost, nichts Hartes kauen lassen.\n2) ${broken||bleedSmell?'Heute noch':'Zeitnah'} Tierarzt/Zahnröntgen.\n3) Schmerzen/Schwellung → schneller Termin.`; s.state.name=null; return final;}}
 ];
-
-/* --- Emergency-Priorität (immer Thema wechseln, falls erkannt) --- */
-const EMERGENCY_IDS = new Set(['heat','bleeding','bloat','poison','seizure','urine','fracture']);
 
 /* ---------- Router ---------- */
 function findCase(text, lang){ for(const c of CASES){ if(c.match(text,lang)) return c; } return null; }
 function antiRepeat(out, s){ const outNorm=norm(out); if(outNorm===s.lastBot){ const extra=(s.lang==='en')?"Anything else?":"Noch etwas?"; if(norm(out+"\n"+extra)!==s.lastBot) return out+"\n"+extra; return out+" …"; } return out; }
 
-/* ---------- Main reply (mit Themenwechsel-Fix) ---------- */
+/* ---------- Main reply (Notfall-Priorität) ---------- */
 function replyFor(text, s){
   if (s.lang===null) s.lang = detectLang(text);
   const L = TXT[s.lang || 'de'];
@@ -189,21 +218,25 @@ function replyFor(text, s){
   // Anti-duplicate input
   if (n && n===s.lastUser && (tNow - s.lastUserAt < 10000)) return rotate(TXT[s.lang||'de'].dup, s.idx);
 
-  // --- NEU: immer auf erkannten neuen Fall springen (auch während aktivem Fall) ---
+  // 1) Notfall zuerst prüfen → SOFORT antworten
   const detected = findCase(text, s.lang || 'de');
-  if (detected && (!s.state.name || s.state.name !== detected.id || EMERGENCY_IDS.has(detected.id))) {
-    s.state = { name: detected.id, step: 0, data: {} };
-    return detected.start(text, s, L);
+  if (detected && detected.emergency) {
+    s.state = { name: null, step: 0, data: {} };
+    return detected.start(text, s, L); // start() gibt die fertige Notfall-Antwort zurück
   }
 
-  // Continue active case (wenn nix Neues erkannt)
+  // 2) Falls kein Notfall: aktiven Case fortsetzen oder neuen Case starten
   if (s.state.name){
     const active = CASES.find(c=>c.id===s.state.name);
     if (active) return active.step(text, s, L);
     s.state={name:null,step:0,data:{}};
   }
+  if (detected){
+    s.state = { name: detected.id, step: 0, data: {} };
+    return detected.start(text, s, L);
+  }
 
-  // Default
+  // 3) Default
   return `${rotate(L.acks,s.idx)} ${rotate(L.tails,s.idx)}`;
 }
 
@@ -275,4 +308,5 @@ function startCLI(){
     console.error('[FATAL]', e); process.exit(1);
   }
 })();
+
 

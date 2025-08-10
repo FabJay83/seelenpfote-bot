@@ -1,25 +1,33 @@
+# app.py
 """
-Seelenpfote – MaxPack v2 (final)
-=================================
-Ein-Datei-Variante für schnellen Rollout + **lokales Testen ohne Telegram**.
+Seelenpfote – MaxPack v2 (final, pure Python)
+=============================================
+Ein-Datei-Variante für schnellen Rollout + lokales Testen ohne Telegram.
 
 Quickstart
 ----------
 1) Lokal testen (ohne Telegram, keine Zusatz-Installation nötig):
-   python app.py --cli   # interaktive Konsole
-   python app.py --selftest  # integrierte Regressionstests
+   python app.py --cli        # interaktive Konsole
+   python app.py --selftest   # integrierte Regressionstests
 
-2) Optional: Mit Telegram-Bot nutzen (nur, wenn Umgebung Bibliotheken zulässt):
-   pip install python-telegram-bot==21.4 pydantic==2.*  
-   (Optional Sprachekennung): pip install langid
-   TELEGRAM_BOT_TOKEN als Env setzen
-   python app.py  # startet automatisch Telegram, wenn Bibliothek & Token verfügbar sind
+2) Telegram-Bot (optional, wenn Bibliothek & Token vorhanden):
+   pip install python-telegram-bot==21.4 pydantic==2.* langid
+   export TELEGRAM_BOT_TOKEN=...  # Railway: Variable setzen
+   python app.py --telegram   # erzwingt Telegram-Modus
+
+3) Railway (empfohlen als reine Python-App):
+   requirements.txt:
+     python-telegram-bot==21.4
+     pydantic==2.*
+     langid
+   Start Command:
+     python app.py --telegram
 
 Wichtig
 -------
-- **Kein ModuleNotFoundError mehr**: Wenn die `telegram`-Bibliothek fehlt oder kein Token gesetzt ist, startet das Skript automatisch im **CLI-Modus**.
-- Robustes State-Management → **keine Wiederholungs-Loops** (z. B. bei „kein Erbrechen“).
-- DE/EN mit Auto-Erkennung + `/de`/`/en` Override.
+- Startet automatisch im CLI-Fallback, wenn `python-telegram-bot` fehlt oder kein Token gesetzt ist.
+- Robustes State-Management → keine Wiederholungs-Loops (z. B. bei „kein Erbrechen“).
+- DE/EN mit Auto-Erkennung + /de /en Override.
 - Erste-Hilfe-Blöcke modular erweiterbar.
 """
 from __future__ import annotations
@@ -638,6 +646,7 @@ if __name__ == "__main__":
         else:
             print("[INFO] Telegram library or token not available – starting CLI mode.")
             run_cli()
+
 
 
 

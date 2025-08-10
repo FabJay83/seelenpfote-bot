@@ -1,19 +1,19 @@
 {
   "name": "seelenpfote-bot",
-  "version": "1.4.0",
-  "description": "Seelenpfote Bot – Telegram + CLI, German default, Auto-DE/EN, anti-repetition, helpful intents",
+  "version": "2.0.0",
+  "description": "Seelenpfote Telegram-Bot (DE default, Intent-Erkennung, Fälle in cases.js)",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node index.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "telegraf": "^4.16.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.17"
   }
 }
-
 

@@ -1,446 +1,603 @@
-// index.js — Seelenpfote Bot (Telegraf) — MaxPack v3 (DE/EN auto-detect, no buttons)
+"""
+Seelenpfote – MaxPack v2 (final)
+=================================
+Ein-Datei-Variante für schnellen Rollout + lokales Testen ohne Telegram.
 
-const { Telegraf, session } = require('telegraf');
+Quickstart
+----------
+1) Abhängigkeiten (empfohlenes Minimal-Set):
+   pip install python-telegram-bot==21.4 pydantic==2.*
+   (Optional für bessere Sprachekennung): pip install langid
 
-// --- BOT_TOKEN prüfen ---
-const TOKEN = process.env.BOT_TOKEN;
-if (!TOKEN || TOKEN.trim().length < 30) {
-  console.error('❌ BOT_TOKEN fehlt/ungültig.');
-  process.exit(1);
-}
-const bot = new Telegraf(TOKEN.trim());
+2) Lokal im CLI testen (ohne Telegram):
+   python app.py --cli
 
-// ----------------- Safety & Sessions -----------------
-bot.catch((err) => console.error('⚠️ Bot-Fehler:', err));
-bot.use((ctx, next) => { if (!ctx.session) ctx.session = {}; return next(); });
-bot.use(session());
+3) Mit Telegram-Bot nutzen:
+   TELEGRAM_BOT_TOKEN als Umgebungsvariable setzen (Railway: Variables)
+   python app.py  (lokal) oder als Railway Procfile/Start-Cmd
 
-// ----------------- Language utils -----------------
-function detectLangFromText(txt) {
-  if (!txt) return null;
-  const t = txt.toLowerCase();
-  const enHits = /(hello|hi|hey|dog|cat|vomit|diarrh|help|first aid|next steps|poison|heatstroke|bleeding)/i.test(t);
-  const deHits = /(hallo|moin|hund|katze|erbrechen|durchfall|hilfe|erste hilfe|nächste schritte|vergift|hitzschlag|blutung)/i.test(t);
-  if (enHits && !deHits) return 'en';
-  if (deHits && !enHits) return 'de';
-  return null;
-}
-function normalizeLang(langCode) {
-  if (!langCode) return 'de';
-  const lc = String(langCode).toLowerCase();
-  if (lc.startsWith('de')) return 'de';
-  if (lc.startsWith('en')) return 'en';
-  return 'de';
-}
-function ensureProfile(ctx) {
-  if (!ctx.session) ctx.session = {};
-  if (!ctx.session.profile) {
-    ctx.session.profile = {
-      id: ctx.from?.id,
-      name: ctx.from?.first_name || 'Freund',
-      lang: normalizeLang(ctx.from?.language_code),
-      pet: null,              // 'Hund' | 'Katze' | 'Dog' | 'Cat' (nur Anzeige)
-      lastIssue: null,        // Themen-Schlüssel
-      lastPhotoTs: null,
-      state: 'idle',          // 'idle' | 'await_details' | 'await_profile'
-      details: {},            // since, pain, feverVomiting, behavior, age, weight
-    };
-  }
-  return ctx.session.profile;
-}
-function setState(p, next) {
-  if (p.state !== next) {
-    console.log(`🔄 STATE: ${p.state} -> ${next}`);
-    p.state = next;
-  }
-}
-function setLangByContext(ctx, p, maybeText) {
-  // Priorität: explizit gesetzte Sprache via /language > Text-Erkennung > Telegram language_code
-  const auto = detectLangFromText(maybeText);
-  if (auto && auto !== p.lang) p.lang = auto;
-}
+Hinweis
+------
+- Robustes State-Management (kein Wiederholungs-Loop)
+- Einfache NLU mit Negations-Erkennung ("kein/keine/nicht" etc.)
+- Automatische Sprache (DE/EN) + manueller Override per "/de" oder "/en"
+- Szenario-Bibliothek (Erste Hilfe) modular, leicht erweiterbar
+- Idempotente Antworten: gleicher Input -> keine doppelte Blockausgabe
+- Reproducible Tester + PyTest-Style Mini-Tests integrierbar
+"""
+from __future__ import annotations
+import os
+import re
+import time
+import json
+import argparse
+from dataclasses import dataclass, field, asdict
+from typing import Dict, Optional, List, Tuple
 
-// ----------------- Texte DE/EN -----------------
-const TXT = {
-  welcome: {
-    de: (name)=>`🐾 Hallo ${name}! Schön, dass du da bist. Ich bin *Seelenpfote* – ruhig, herzlich und an deiner Seite.\nErzähl mir einfach, was los ist. Wenn’s hilft, schick mir gern ein *Foto*.`,
-    en: (name)=>`🐾 Hi ${name}! I’m *Seelenpfote* – calm, caring, and here for you.\nTell me what’s going on. You can also send a *photo* if helpful.`
-  },
-  askPet: {
-    de: `Hast du einen *Hund* oder eine *Katze*? Antworte mit „Hund“ oder „Katze“.`,
-    en: `Do you have a *dog* or a *cat*? Reply with “dog” or “cat”.`
-  },
-  helpCmd: {
-    de: (name)=>`So laufen wir zusammen, ${name}:\n1) Du beschreibst kurz das Thema (z. B. „humpelt“, „Durchfall“, „etwas Giftiges gefressen“).\n2) Gern Foto/Video dazu.\n3) Ich gebe dir *Erste Schritte* & *ruhige Orientierung*.\n\n⚠️ Ich *ersetze keinen Tierarzt*. Bei Atemnot, starken Schmerzen, Krämpfen oder Kollaps bitte sofort Notdienst.`,
-    en: (name)=>`Here’s how we work, ${name}:\n1) Briefly describe the issue (e.g., “limping”, “diarrhea”, “ate something toxic”).\n2) Add a photo/video if you can.\n3) I’ll give you *first aid steps* and *calm guidance*.\n\n⚠️ I do *not* replace a vet. If breathing trouble, severe pain, seizures, or collapse: emergency vet NOW.`
-  },
-  sosCmd: {
-    de: `Wenn es dringend wirkt: ruhig atmen, Tier sichern, warm halten (nicht überhitzen).\n• Starke Blutung: *sanfter Druck* mit sauberem Tuch\n• Vergiftung: *kein* Erbrechen auslösen, Verpackung sichern\n• Hitzschlag: Schatten, Pfoten/Brust *lauwarm* kühlen\n• Atemnot/Kollaps/Krampf: *sofort* Notdienst\n\nSchreib mir das *Hauptproblem*, ich helfe dir direkt.`,
-    en: `If it feels urgent: stay calm, secure your pet, keep warm (not overheated).\n• Heavy bleeding: *gentle pressure* with clean cloth\n• Poisoning: *do not* induce vomiting, keep packaging\n• Heatstroke: shade, *lukewarm* cooling of paws/chest\n• Breathing trouble/collapse/seizure: emergency vet NOW\n\nTell me the *main problem* and I’ll guide you.`
-  },
-  contact: {
-    de: `📨 E-Mail: info@seelenpfote.app\n📸 Instagram: @seelenpfote.app`,
-    en: `📨 Email: info@seelenpfote.app\n📸 Instagram: @seelenpfote.app`
-  },
-  privacy: {
-    de: `🔒 Kurzfassung: Ich speichere nur, was nötig ist. Details: https://www.seelenpfote.app/#Datenschutz`,
-    en: `🔒 Short version: I only store what’s necessary. Details: https://www.seelenpfote.app/#Datenschutz`
-  },
-  photoQs: {
-    de: (name,pet)=>`Danke fürs Bild, ${name}. Magst du mir kurz sagen:\n• Seit wann?\n• Schmerzen (ja/nein)?\n• Fieber/Erbrechen?\n• Verhalten verändert?\n${pet ? `(Tier: ${pet})` : ''}`,
-    en: (name,pet)=>`Thanks for the photo, ${name}. Could you tell me:\n• Since when?\n• Pain (yes/no)?\n• Fever/vomiting?\n• Behavior changed?\n${pet ? `(Pet: ${pet})` : ''}`
-  },
-  askProfile: {
-    de: `Danke dir. Jetzt bitte *Alter, Gewicht und seit wann* (z. B. „6 Jahre, 9.5 kg, seit 1 Woche“).`,
-    en: `Thank you. Now please share *age, weight, and since when* (e.g., “6 years, 9.5 kg, since 1 week”).`
-  },
-  summaryLead: {
-    de: (name)=>`Danke, ${name}. Ich habe verstanden:`,
-    en: (name)=>`Thanks, ${name}. Here’s what I understood:`
-  },
-  summaryBullets: {
-    de: { pet:'• Tier: ', issue:'• Thema: ', since:'• Seit: ', pain:'• Schmerzen: ', fever:'• Fieber/Erbrechen: ', weight:'• Gewicht: ', age:'• Alter (ca.): ' },
-    en: { pet:'• Pet: ', issue:'• Issue: ', since:'• Since: ', pain:'• Pain: ', fever:'• Fever/Vomiting: ', weight:'• Weight: ', age:'• Age (approx): ' }
-  },
-  summaryTail: {
-    de: `\nWenn du bereit bist, schreib einfach *„erste hilfe“*, *„nächsten schritte“* oder *„was tun“* – ich führe dich liebevoll hindurch.`,
-    en: `\nWhen ready, just type *“first aid”*, *“next steps”* or *“what to do”* — I’ll guide you gently.`
-  },
-  fallback: {
-    de: (name)=>`Danke, ${name}. Wenn du magst, sag mir *Alter, Gewicht und seit wann* – oder beschreibe das *Hauptproblem* (z. B. „vergiftung“, „hitzschlag“, „humpelt“, „durchfall“).`,
-    en: (name)=>`Thanks, ${name}. If you like, share *age, weight, and since when* — or describe the *main problem* (e.g., “poisoning”, “heatstroke”, “limping”, “diarrhea”).`
-  }
-};
+try:
+    import langid  # optional, für bessere Erkennung
+    _HAS_LANGID = True
+except Exception:
+    _HAS_LANGID = False
 
-// ----------------- Helper (parsing) -----------------
-const weightRe = /(\d+[.,]?\d*)\s*(kg|kilo|kilogramm|kilograms?|lbs?)\b/i;
-const ageRe    = /(\d+[.,]?\d*)\s*(jahr|jahre|years?|yr|yrs|yo|j)\b/i;
-const sinceRe  = /(?:seit|since)\s+([^\n,.!]+)/i;
+# ====== Utilities: language detection ==========================================================
 
-const parseWeight = (t)=>{ const m=t.match(weightRe); return m?parseFloat(m[1].replace(',','.')):undefined; };
-const parseAge    = (t)=>{ const m=t.match(ageRe); if(m) return parseFloat(m[1].replace(',','.')); const m2=t.match(/(\d+[.,]?\d*)/); if(m2){const v=parseFloat(m2[1].replace(',','.')); if(v<=25) return v;} return undefined; };
-const parseSince  = (t)=>{ const m=t.match(sinceRe); if(m) return (t.toLowerCase().includes('since')?'since ':'seit ') + m[1].trim(); const m2=t.match(/(\d+)\s*(tag|tage|woche|wochen|monat|monate|day|days|week|weeks|month|months)/i); return m2?`${m2[1]} ${m2[2]}`:undefined; };
-const hasYes      = (t)=>/\b(ja|yes|yep|stimmt)\b/i.test(t);
-const hasNo       = (t)=>/\b(nein|no|nope|nicht)\b/i.test(t);
+def detect_lang(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return "de"  # Default DE für Seelenpfote
+    if _HAS_LANGID:
+        code, _ = langid.classify(t)
+        return "de" if code.startswith("de") else "en"
+    # Fallback Heuristik
+    de_markers = [" und ", " nicht", " kein", " keine", " danke", " pfote", " hund", " katze", " seit ", " schmerz"]
+    has_umlaut = bool(re.search(r"[äöüÄÖÜß]", t))
+    score = sum(m in t.lower() for m in de_markers) + (2 if has_umlaut else 0)
+    return "de" if score >= 1 else "en"
 
-// ----------------- Erste-Hilfe-Katalog (DE+EN) -----------------
-const INTENTS = [
-  // Heat / Cold / Energy
-  { key:'heatstroke',
-    regex:/(hitzschlag|ueberhitzt|überhitzt|too\s*hot|overheat|heatstroke|pant.*extreme)/i,
-    text:{ de:`🥵 *Hitzschlag/Überhitzung*\n• Sofort Schatten/kühl, Lüften\n• Pfoten/Brust *lauwarm* befeuchten (nicht eiskalt)\n• Wasser anbieten, nicht erzwingen\n• >40°C kritisch → *sofort Tierarzt*`,
-           en:`🥵 *Heatstroke/Overheating*\n• Move to shade/cool air\n• Wet paws/chest with *lukewarm* water (not ice-cold)\n• Offer water, don’t force\n• >104°F/40°C is critical → *vet immediately*`}},
-  { key:'hypothermia_frost',
-    regex:/(unterk[üu]hlung|frost|very\s*cold|hypotherm|shiver)/i,
-    text:{ de:`🧊 *Unterkühlung/Frost*\n• Langsam aufwärmen (Decke/Körperwärme), gut trocknen\n• Keine direkte Hitze/kein heißes Wasser\n• Apathie/steifer Gang/weiße Ohr-/Schwanzspitzen → *Tierarzt*`,
-           en:`🧊 *Hypothermia/Frost*\n• Warm up slowly (blanket/body heat), dry well\n• No direct heat or hot water\n• Lethargy, stiff gait, pale tips → *see a vet*`}},
-  { key:'hypoglycemia',
-    regex:/(unterzucker|low\s*blood\s*sugar|hypoglyc|puppy.*weak|toy\s*breed.*weak)/i,
-    text:{ de:`🍬 *Unterzucker (v. a. Welpe/Minirasse)*\n• Bei Bewusstsein: etwas Honig/Glukose am Zahnfleisch (nicht erzwingen)\n• Warm halten → *Tierarzt*`,
-           en:`🍬 *Hypoglycemia (esp. puppies/toy breeds)*\n• If conscious: rub a bit of honey/glucose on gums (don’t force)\n• Keep warm → *see a vet*`}},
-  // Poison / Foreign body / GI
-  { key:'poison',
-    regex:/(vergift|giftig|köder|koeder|rattengift|schokolade|xylit|xylitol|grapes?|raisins?|antifreeze|pesticide|nikotin|nicotine|poison|toxic|ate\s*medicine|medikament.*gefressen)/i,
-    text:{ de:`☠️ *Vergiftungsverdacht*\n• *Kein* Erbrechen auslösen\n• Stoff/Verpackung sichern\n• Aktivkohle nur nach Rücksprache\n• *Sofort Tierarzt/Notdienst*`,
-           en:`☠️ *Suspected poisoning*\n• *Do not* induce vomiting\n• Keep product/packaging\n• Activated charcoal only after vet advice\n• *Emergency vet immediately*`}},
-  { key:'foreign_body',
-    regex:/(fremdkörper.*(gefressen|verschluckt)|socke|sock|stein|stone|bone\s*swallowed|toy\s*(swallowed|ingested))/i,
-    text:{ de:`🧵 *Fremdkörper verschluckt*\n• Nicht füttern/tränken\n• Kein Erbrechen provozieren\n• Faden/Leine *nie* ziehen!\n• *Zeitnah Tierarzt* (Röntgen/US nötig)`,
-           en:`🧵 *Foreign body swallowed*\n• No food/water\n• Do not induce vomiting\n• Never pull strings/threads!\n• *See a vet soon* (X-ray/ultrasound)`}},
-  { key:'vomiting',
-    regex:/(erbrechen|brechen|vomit|throwing\s*up)/i,
-    text:{ de:`🤢 *Erbrechen*\n• 6–12 h Futterpause, Wasser anbieten\n• Dann kleine leicht verdauliche Portionen\n• Häufig/blutig/Fieber/Apathie/Welpe/Senior → *Tierarzt*`,
-           en:`🤢 *Vomiting*\n• Withhold food 6–12 h, offer water\n• Then small bland meals\n• Frequent/bloody/fever/lethargy/puppy/senior → *vet*`}},
-  { key:'diarrhea',
-    regex:/(durchfall|diarrh(ea)?)/i,
-    text:{ de:`🥣 *Durchfall*\n• Wasser bereitstellen, Schonkost in Miniportionen 12–24 h\n• Kein Fett/Leckerlis\n• Blutig/Fieber/Apathie/Erbrechen oder >24–48 h → *Tierarzt*`,
-           en:`🥣 *Diarrhea*\n• Provide water, bland diet in small portions 12–24 h\n• No fatty food/treats\n• Bloody/fever/lethargy/vomiting or >24–48 h → *vet*`}},
-  { key:'constipation',
-    regex:/(verstopfung|constipat|hard\s*stool|straining\s*no\s*poop)/i,
-    text:{ de:`🚽 *Verstopfung*\n• Kein hartes Drücken provozieren, keine Hausmittel\n• Wasser anbieten, sanfte Bewegung\n• Schmerz, Lethargie, Erbrechen oder >24–48 h → *Tierarzt*`,
-           en:`🚽 *Constipation*\n• Don’t force bowel movements, avoid home meds\n• Offer water, gentle movement\n• Pain, lethargy, vomiting or >24–48 h → *vet*`}},
-  { key:'pancreatitis',
-    regex:/(pankreatitis|pancreatitis|abdominal\s*pain.*fat|after\s*fatty\s*meal|fettiges\s*futter)/i,
-    text:{ de:`🔥 *Pankreatitis-Verdacht*\n• Bauchschmerz, Erbrechen, Mattigkeit nach *fettem Futter*\n• Schonkost wenig, Wasser\n• *Tierarzt* (Schmerz/Infusion möglich)`,
-           en:`🔥 *Pancreatitis (suspected)*\n• Abdominal pain, vomiting, lethargy after *fatty meal*\n• Bland diet small portions, water\n• *Vet* (pain relief/fluids may be needed)`}},
-  { key:'bloat_gdv',
-    regex:/(aufgebl[aä]ht|bloat|gdv|distend.*abdomen|hard\s*belly|unsuccessful\s*retch)/i,
-    text:{ de:`🚨 *Magendrehung (Hund) – Verdacht*\n• Aufgeblähter harter Bauch, erfolgloses Würgen, Unruhe\n• Nicht füttern/tränken → *sofort* Notdienst (zeitkritisch)`,
-           en:`🚨 *Gastric dilatation/volvulus (dog) suspected*\n• Hard distended belly, unproductive retching, restlessness\n• No food/water → *emergency vet now* (time critical)`}},
-  { key:'dehydration',
-    regex:/(dehydriert|dehydrated|dry\s*gums|skin\s*tent|drinks?\s*little)/i,
-    text:{ de:`💧 *Dehydrierung*\n• Häufig kleine Wassermengen anbieten\n• Lethargie, trockene Schleimhäute, stehende Hautfalte → *Tierarzt* (Infusion)`,
-           en:`💧 *Dehydration*\n• Offer small amounts of water frequently\n• Lethargy, dry gums, skin tent → *vet* (fluids)`}},
-  // Trauma / Wunden / Zähne
-  { key:'wound_limp',
-    regex:/(wunde|schnitt|cut|laceration|humpel|limp|lame|paw\s*(cut|injured))/i,
-    text:{ de:`🩹 *Wunde/Humpeln*\n• Lauwarm spülen, *Druck* bei Blutung\n• Lecken verhindern (Body/Kragen), ruhig halten\n• Tiefe/verschmutzte Wunden → *Tierarzt*\n• Lahmheit/Schwellung >24–48 h → *Tierarzt*`,
-           en:`🩹 *Wound/Limp*\n• Rinse with lukewarm water, *gentle pressure* if bleeding\n• Prevent licking (cone/shirt), rest\n• Deep/contaminated wounds → *vet*\n• Lameness/swelling >24–48 h → *vet*`}},
-  { key:'bite_wound',
-    regex:/(biss|bite\s*wound|dog\s*bite|cat\s*bite|fight)/i,
-    text:{ de:`🦷 *Bissverletzung*\n• Kleine Löcher = tiefe Taschen möglich → Infektionsrisiko\n• Spülen (lauwarm), sauber abdecken, ruhig halten\n• *Tierarzt* (Reinigung, ggf. AB/Drainage)`,
-           en:`🦷 *Bite wound*\n• Small holes can hide deep pockets → infection risk\n• Rinse lukewarm, cover cleanly, rest\n• *Vet* (cleaning, possible antibiotics/drain)`}},
-  { key:'dental_fracture',
-    regex:/(zahn.*abgebrochen|tooth\s*(fracture|broken))/i,
-    text:{ de:`🦷 *Zahn abgebrochen*\n• Schmerz möglich; Speicheln/Blut\n• Kein hartes Futter/Kauartikel\n• *Zeitnah Tier(zahn)arzt* (Pulpa offen? Entzündungsgefahr)`,
-           en:`🦷 *Tooth fracture*\n• Pain possible; drooling/blood\n• No hard food/chews\n• *See (dental) vet soon* (pulp exposure risk)`}},
-  // Airways / Neuro / Electric / Drowning
-  { key:'choking',
-    regex:/(erstick|chok(e|ing)|object\s*stuck|würg|wuerg|keuch|breath\s*hard)/i,
-    text:{ de:`🫁 *Erstickungsverdacht/Fremdkörper*\n• Sichtbar lockeres vorsichtig entfernen (nicht stechen)\n• Keine blinden Tiefgriffe\n• Kleine Hunde: 5× Rückenschläge zw. Schultern, im Wechsel mit Brustkompressionen\n• *Sofort Tierarzt* bei Atemnot`,
-           en:`🫁 *Choking/foreign body*\n• Remove only *visible loose* objects (no probing)\n• No blind deep grabs\n• Small dogs: 5 firm back blows between shoulders, alternate with chest compressions\n• *Vet immediately* if breathing difficulty persists`}},
-  { key:'seizure',
-    regex:/(krampf|seizure|epilep)/i,
-    text:{ de:`⚡ *Krampfanfall*\n• Nicht festhalten, nichts ins Maul, Umgebung sichern\n• Zeit messen (>3–5 min/Cluster = kritisch)\n• Danach ruhig, warm halten\n• *Sofort Tierarzt* bei erstem Anfall/ >3–5 min/mehreren Anfällen`,
-           en:`⚡ *Seizure*\n• Don’t restrain, nothing in mouth, make area safe\n• Time it (>3–5 min/cluster = critical)\n• Afterwards keep calm and warm\n• *Emergency vet* for first seizure/>3–5 min/multiple`}},
-  { key:'near_drowning',
-    regex:/(beinahe.*ertrunken|near\s*drown|inhaled\s*water)/i,
-    text:{ de:`🌊 *Beinahe-Ertrinken*\n• Ruhig, wärmen\n• Kopf/Brust leicht tiefer, wenn Wasser austritt\n• Anhaltende Atemnot/Husten/Blaufärbung → *sofort Tierarzt*`,
-           en:`🌊 *Near drowning*\n• Keep calm and warm\n• Slightly lower head/chest if water drains\n• Ongoing breathing issues/cough/blue gums → *emergency vet*`}},
-  { key:'electric_shock',
-    regex:/(stromschlag|electric\s*shock|chewed\s*cable)/i,
-    text:{ de:`⚡ *Stromschlag*\n• Stromquelle trennen, erst dann anfassen\n• Maulverbrennungen möglich → ruhig beobachten\n• Atemnot, Apathie, Krampf → *sofort Tierarzt*`,
-           en:`⚡ *Electric shock*\n• Disconnect power before touching\n• Mouth burns possible → monitor\n• Breathing trouble, lethargy, seizures → *emergency vet*`}},
-  // Urogenital / Birth
-  { key:'urinary_block',
-    regex:/(kater.*nicht.*urin|urinary\s*block|straining\s*no\s*urine|blocked\s*tom)/i,
-    text:{ de:`🚨 *Harnröhrenverschluss (v. a. Kater)*\n• Häufiges Pressen ohne Urin, Schmerz, Lautäußerung\n• *Sofort* Notdienst – lebensbedrohlich`,
-           en:`🚨 *Urethral blockage (esp. male cats)*\n• Repeated straining with little/no urine, pain, vocalizing\n• *Emergency vet now* — life-threatening`}},
-  { key:'pyometra',
-    regex:/(pyometra|eitergebärmutter|gebärmutterentzündung|uterus\s*infection)/i,
-    text:{ de:`🚨 *Gebärmuttervereiterung*\n• Matt, Fieber, Durst, evtl. eitriger Ausfluss\n• *Sofort Tierarzt* (oft OP/Intensiv)`,
-           en:`🚨 *Pyometra*\n• Lethargy, fever, thirst, possible pus discharge\n• *Emergency vet* (often surgery/IV needed)`}},
-  { key:'whelping',
-    regex:/(geburt|wehen|whelp(ing)?|in\s*labour|labor)/i,
-    text:{ de:`👶 *Geburt/Wehen*\n• Pausen zw. Welpen bis ~2 h normal\n• Pressen >20–30 min ohne Welpe, stinkender Ausfluss, Welpe steckt → *sofort Notdienst*\n• Warm, ruhig, saubere Tücher`,
-           en:`👶 *Whelping/Labour*\n• Gaps up to ~2 h between pups can be normal\n• Straining >20–30 min without pup, foul discharge, stuck pup → *emergency vet*\n• Keep warm, calm, clean towels`}},
-  // Allergy / Skin / Eyes / Ears / Ticks
-  { key:'allergy_anaphylaxis',
-    regex:/(allerg|anaphy|swollen\s*face|gesicht\s*geschwollen|hives|quaddeln|sting.*reaction)/i,
-    text:{ de:`🤧 *Allergische Reaktion*\n• Leicht: kühlen\n• Gesicht/Kehlkopf-Schwellung, Atemnot → *sofort Notdienst*\n• Keine Human-Antihistaminika ohne Rücksprache`,
-           en:`🤧 *Allergic reaction*\n• Mild: cool compress\n• Facial/throat swelling, breathing trouble → *emergency vet*\n• No human antihistamines without vet advice`}},
-  { key:'eye_injury',
-    regex:/(auge.*verletz|eye\s*(injury|ulcer|red|discharge|foreign))/i,
-    text:{ de:`👁️ *Augenproblem*\n• Nicht reiben lassen (Kragen), Licht meiden\n• Keine Salben ohne Diagnose\n• Schmerz, Eiter, Trübung, Fremdkörper → *zeitnah Tierarzt*`,
-           en:`👁️ *Eye problem*\n• Prevent rubbing (cone), avoid bright light\n• No ointments without diagnosis\n• Pain, discharge, cloudiness, foreign body → *see a vet promptly*`}},
-  { key:'ear_infection',
-    regex:/(ohr.*entzündung|ear\s*infection|head\s*shaking|kopfschütteln|othaemat|oth[aä]matom|aural\s*hematoma)/i,
-    text:{ de:`👂 *Ohrproblem*\n• Schütteln/Juckreiz, evtl. Geruch\n• Nicht tief reinigen, nichts einträufeln\n• Blutblase (Othämatom) → *Tierarzt*`,
-           en:`👂 *Ear problem*\n• Head shaking/itching, possible odor\n• Don’t deep-clean or add drops\n• Aural hematoma → *vet*`}},
-  { key:'tick_foxtail',
-    regex:/(zecke|tick|foxtail|grassamen|grasfahne|foreign\s*body\s*(paw|nose|ear))/i,
-    text:{ de:`🪲 *Zecke/Fremdkörper*\n• Zecke hautnah mit Karte/Zange *gerade* ziehen (nicht quetschen)\n• Grasfahne in Nase/Ohr/Pfote → *Tierarzt* (nicht stochern)`,
-           en:`🪲 *Tick/foxtail foreign body*\n• Remove tick close to skin with tool *straight out* (don’t crush)\n• Foxtail in nose/ear/paw → *vet* (don’t probe)`}},
-  // Burns / Chemicals / Blunt trauma
-  { key:'burns_chemical',
-    regex:/(verbrennung|burn|scald|chemical|verätzt|veraetzt|acid|alkali|laugen)/i,
-    text:{ de:`🔥 *Verbrennung/Verätzung*\n• Quelle entfernen; 10–15 min *lauwarm* kühlen (nicht eiskalt)\n• Chemikalie: *lange* spülen, Handschutz\n• Keine Salben/Öle; steril abdecken\n• Je nach Ausmaß *Tierarzt*`,
-           en:`🔥 *Burn/Chemical exposure*\n• Remove source; cool *lukewarm* 10–15 min (not ice)\n• Chemicals: flush thoroughly, protect your hands\n• No creams/oils; cover sterile\n• See a vet depending on severity`}},
-  { key:'blunt_trauma',
-    regex:/(angefahren|hit\s*by\s*car|fallen|sturz|kollision|collision|autounfall|kicked)/i,
-    text:{ de:`🩺 *Stumpfes Trauma*\n• Ruhe, warm halten, Blutungen stillen\n• Versteckte Innenschäden möglich (Milz, Lunge)\n• Apathie, blasse Schleimhäute, schneller Puls, Bauchschmerz → *sofort Tierarzt*`,
-           en:`🩺 *Blunt trauma*\n• Rest, keep warm, control bleeding\n• Internal injuries possible (spleen, lungs)\n• Lethargy, pale gums, fast pulse, belly pain → *emergency vet*`}},
-];
+# ====== Domain: Structured state ==============================================================
 
-const ISSUE_LABELS = {
-  heatstroke:{de:'Hitzschlag/Überhitzung', en:'Heatstroke/Overheating'},
-  hypothermia_frost:{de:'Unterkühlung/Frost', en:'Hypothermia/Frost'},
-  hypoglycemia:{de:'Unterzucker', en:'Hypoglycemia'},
-  poison:{de:'Vergiftung', en:'Poisoning'},
-  foreign_body:{de:'Fremdkörper verschluckt', en:'Foreign body swallowed'},
-  vomiting:{de:'Erbrechen', en:'Vomiting'},
-  diarrhea:{de:'Durchfall', en:'Diarrhea'},
-  constipation:{de:'Verstopfung', en:'Constipation'},
-  pancreatitis:{de:'Pankreatitis-Verdacht', en:'Pancreatitis (suspected)'},
-  bloat_gdv:{de:'Magendrehung (Hund)', en:'GDV (dog)'},
-  dehydration:{de:'Dehydrierung', en:'Dehydration'},
-  wound_limp:{de:'Wunde/Humpeln', en:'Wound/Limp'},
-  bite_wound:{de:'Bissverletzung', en:'Bite wound'},
-  dental_fracture:{de:'Zahn abgebrochen', en:'Tooth fracture'},
-  choking:{de:'Erstickungsverdacht', en:'Choking/Foreign body'},
-  seizure:{de:'Krampfanfall', en:'Seizure'},
-  near_drowning:{de:'Beinahe-Ertrinken', en:'Near drowning'},
-  electric_shock:{de:'Stromschlag', en:'Electric shock'},
-  urinary_block:{de:'Harnröhrenverschluss (Kater)', en:'Urethral blockage (male cat)'},
-  pyometra:{de:'Gebärmuttervereiterung', en:'Pyometra'},
-  whelping:{de:'Geburt/Wehen', en:'Whelping/Labour'},
-  allergy_anaphylaxis:{de:'Allergische Reaktion', en:'Allergic reaction'},
-  eye_injury:{de:'Augenproblem', en:'Eye problem'},
-  ear_infection:{de:'Ohrenproblem', en:'Ear problem'},
-  tick_foxtail:{de:'Zecke/Grasfahne', en:'Tick/Foxtail'},
-  burns_chemical:{de:'Verbrennung/Verätzung', en:'Burn/Chemical'},
-  blunt_trauma:{de:'Stumpfes Trauma', en:'Blunt trauma'},
-};
+@dataclass
+class UserFacts:
+    species: Optional[str] = None  # dog/cat
+    age_years: Optional[float] = None
+    weight_kg: Optional[float] = None
+    since_when: Optional[str] = None  # free text
 
-function firstAidFor(key, lang) {
-  const item = INTENTS.find(i => i.key === key);
-  if (!item) return null;
-  return item.text[lang] || item.text.de;
-}
+@dataclass
+class Symptoms:
+    pain: Optional[bool] = None
+    fever: Optional[bool] = None
+    vomiting: Optional[bool] = None
+    behavior_changed: Optional[bool] = None
 
-// ----------------- Commands -----------------
-bot.command('hilfe', async (ctx) => {
-  const p = ensureProfile(ctx);
-  setLangByContext(ctx, p, null);
-  await ctx.reply(TXT.helpCmd[p.lang](p.name), { parse_mode:'Markdown' });
-  setState(p,'idle');
-});
-bot.command('notfall', async (ctx) => {
-  const p = ensureProfile(ctx);
-  setLangByContext(ctx, p, null);
-  await ctx.reply(TXT.sosCmd[p.lang], { parse_mode:'Markdown' });
-  setState(p,'idle');
-});
-bot.command('kontakt', (ctx) => {
-  const p = ensureProfile(ctx); setLangByContext(ctx, p, null);
-  return ctx.reply(TXT.contact[p.lang]);
-});
-bot.command('datenschutz', (ctx) => {
-  const p = ensureProfile(ctx); setLangByContext(ctx, p, null);
-  return ctx.reply(TXT.privacy[p.lang]);
-});
-// Manual language switch: /language de  or  /language en
-bot.command('language', async (ctx) => {
-  const p = ensureProfile(ctx);
-  const args = (ctx.message.text || '').split(/\s+/);
-  const choice = (args[1] || '').toLowerCase();
-  if (choice === 'de' || choice === 'en') {
-    p.lang = choice;
-    await ctx.reply(choice === 'de'
-      ? '✅ Sprache gesetzt: Deutsch.'
-      : '✅ Language set to English.'
-    );
-  } else {
-    await ctx.reply('Use: /language de   or   /language en\nBenutze: /language de   oder   /language en');
-  }
-});
+@dataclass
+class ConversationState:
+    lang: str = "de"
+    facts: UserFacts = field(default_factory=UserFacts)
+    symptoms: Symptoms = field(default_factory=Symptoms)
+    main_issue: Optional[str] = None  # e.g., "humpeln", "durchfall", "vergiftung", "hitzschlag"
+    last_blocks: List[str] = field(default_factory=list)  # zuletzt ausgespielte Hilfe-Blöcke (IDs)
+    asked_slots: List[str] = field(default_factory=list)  # bereits abgefragte Fragen-IDs
+    completed: bool = False
+    last_prompt_signature: Optional[str] = None  # gegen Dubletten
+    updated_at: float = field(default_factory=lambda: time.time())
 
-// ----------------- Greetings & Pet type -----------------
-const greet = /^(hi|hello|hallo|hey|servus|moin|guten\s*tag|good\s*(morning|evening)|guten\s*(morgen|abend))\b/i;
-bot.hears(greet, async (ctx) => {
-  const p = ensureProfile(ctx);
-  setLangByContext(ctx, p, ctx.message.text);
-  await ctx.reply(TXT.welcome[p.lang](p.name), { parse_mode:'Markdown' });
-  if (!p.pet) await ctx.reply(TXT.askPet[p.lang], { parse_mode:'Markdown' });
-});
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False)
 
-bot.hears(/^(hund|dog)$/i, async (ctx)=>{ const p=ensureProfile(ctx); setLangByContext(ctx,p,ctx.message.text); p.pet = (p.lang==='en'?'Dog':'Hund'); await ctx.reply(p.lang==='en'?'Got it: 🐶 *Dog*.':'Alles klar, ich merke mir: 🐶 *Hund*.',{parse_mode:'Markdown'});});
-bot.hears(/^(katze|cat)$/i, async (ctx)=>{ const p=ensureProfile(ctx); setLangByContext(ctx,p,ctx.message.text); p.pet = (p.lang==='en'?'Cat':'Katze'); await ctx.reply(p.lang==='en'?'Got it: 🐱 *Cat*.':'Alles klar, ich merke mir: 🐱 *Katze*.',{parse_mode:'Markdown'});});
+    @staticmethod
+    def from_json(s: str) -> "ConversationState":
+        d = json.loads(s)
+        st = ConversationState()
+        st.lang = d.get("lang", "de")
+        st.facts = UserFacts(**d.get("facts", {}))
+        st.symptoms = Symptoms(**d.get("symptoms", {}))
+        st.main_issue = d.get("main_issue")
+        st.last_blocks = d.get("last_blocks", [])
+        st.asked_slots = d.get("asked_slots", [])
+        st.completed = d.get("completed", False)
+        st.last_prompt_signature = d.get("last_prompt_signature")
+        st.updated_at = d.get("updated_at", time.time())
+        return st
 
-// ----------------- Foto → Details -----------------
-bot.on('photo', async (ctx) => {
-  const p = ensureProfile(ctx);
-  setLangByContext(ctx, p, null);
-  p.lastPhotoTs = Date.now();
-  p.details = {};
-  setState(p,'await_details');
-  await ctx.reply(TXT.photoQs[p.lang](p.name, p.pet));
-});
+# ====== NLU: extract entities/intents with negation handling ===================================
 
-// ----------------- Text-Flow (FSM + Intents) -----------------
-bot.on('text', async (ctx) => {
-  const p = ensureProfile(ctx);
-  const t = (ctx.message.text || '').trim();
-  setLangByContext(ctx, p, t);
-  console.log('📥', p.lang, p.state, '-', ctx.from?.username || ctx.from?.id, ':', t);
+NEG_DE = r"(?:(?:kein|keine|keinen|nicht)\s+)"
+NEG_EN = r"(?:(?:no|not)\s+)"
 
-  // 1) Große Themen-Erkennung → sofort Erstinfo + Profil abfragen
-  for (const it of INTENTS) {
-    if (it.regex.test(t)) {
-      p.lastIssue = it.key;
-      setState(p, 'await_profile');
-      await ctx.reply(firstAidFor(p.lastIssue, p.lang) + (p.lang==='en'
-        ? `\nIf you can, share *age, weight, and since when* — I’ll tailor guidance.`
-        : `\nWenn du magst, nenn mir noch *Alter, Gewicht und seit wann* – dann kann ich gezielter helfen.`),
-        { parse_mode:'Markdown' }
-      );
-      return;
+def parse_message(text: str, lang: str) -> Dict:
+    t = text.strip()
+    lower = t.lower()
+    out = {"facts": {}, "symptoms": {}, "main_issue": None}
+
+    # Species
+    if re.search(r"\b(hund|dog)\b", lower):
+        out["facts"]["species"] = "dog"
+    if re.search(r"\b(katze|cat)\b", lower):
+        out["facts"]["species"] = "cat"
+
+    # Weight (simple extraction like "9.5 kg")
+    m = re.search(r"(\d+[\.,]?\d*)\s*(kg|kilogramm|kilograms|kilo)\b", lower)
+    if m:
+        out["facts"]["weight_kg"] = float(m.group(1).replace(",", "."))
+
+    # Age (years as number)
+    m = re.search(r"(\d+[\.,]?\d*)\s*(jahre|year|years|yo|y/o)\b", lower)
+    if m:
+        out["facts"]["age_years"] = float(m.group(1).replace(",", "."))
+
+    # Since when (very simple): phrases like "seit ..." / "since ..."
+    if lang == "de":
+        m = re.search(r"seit\s+([^\n\r]+)$", lower)
+    else:
+        m = re.search(r"since\s+([^\n\r]+)$", lower)
+    if m:
+        out["facts"]["since_when"] = m.group(1).strip()
+
+    # Symptoms with negation
+    patterns_de = {
+        "vomiting": (rf"\b(erbrechen|brechen|übergeben)\b", rf"\b{NEG_DE}(erbrechen|brechen|übergeben)\b"),
+        "fever": (rf"\b(fieber|temperatur)\b", rf"\b{NEG_DE}(fieber|temperatur)\b"),
+        "pain": (rf"\b(schmerz|schmerzen|tut\s+weh|weh)\b", rf"\b{NEG_DE}(schmerz|schmerzen|tut\s+weh|weh)\b"),
+        "behavior_changed": (rf"\b(verhalten)\s*(?:geändert|anders)\b", rf"\b{NEG_DE}verhalten\b"),
     }
-  }
-
-  // 2) Intent „erste hilfe / next steps / weiter / tipps / beobachtung“
-  if (/(erste\s*hilfe|n[aä]chst\w*\s*schritt\w*|weiter(gehen|e|)\b|was\s*(jetzt|tun)|tipps?|anleitung|beobachtung|first\s*aid|next\s*steps|what\s*to\s*do|advice)/i.test(t)) {
-    const txt = firstAidFor(p.lastIssue, p.lang);
-    if (txt) {
-      await ctx.reply(txt, { parse_mode:'Markdown' });
-    } else {
-      await ctx.reply(p.lang==='en'
-        ? `Sure. Tell me briefly *what it is* (e.g., “limping”, “diarrhea”, “poisoning”, “heatstroke”).`
-        : `Gern. Sag mir kurz, *worum* es geht (z. B. „humpelt“, „Durchfall“, „vergiftung“, „hitzschlag“).`
-      );
+    patterns_en = {
+        "vomiting": (rf"\b(vomit|vomiting|throwing\s*up)\b", rf"\b{NEG_EN}(vomit|vomiting|throwing\s*up)\b"),
+        "fever": (rf"\b(fever|temperature)\b", rf"\b{NEG_EN}(fever|temperature)\b"),
+        "pain": (rf"\b(pain|hurts|ache)\b", rf"\b{NEG_EN}(pain|hurts|ache)\b"),
+        "behavior_changed": (rf"\b(behavior|behaviour)\s*(changed|different)\b", rf"\b{NEG_EN}(behavior|behaviour)\b"),
     }
-    return;
-  }
+    pats = patterns_de if lang == "de" else patterns_en
+    for key, (pos, neg) in pats.items():
+        if re.search(neg, lower):
+            out["symptoms"][key] = False
+        elif re.search(pos, lower):
+            out["symptoms"][key] = True
 
-  // 3) Antworten auf Detailfragen nach Foto
-  if (p.state === 'await_details') {
-    p.details.since = p.details.since || parseSince(t);
-    if (p.details.pain === undefined) {
-      if (hasYes(t)) p.details.pain = true;
-      else if (hasNo(t)) p.details.pain = false;
+    # Main issue detection
+    issues_de = {
+        "humpeln": r"\b(humpelt|lahmt|lahmheit)\b",
+        "durchfall": r"\b(durchfall|diarrhö|diarrhoe)\b",
+        "vergiftung": r"\b(vergiftung|gift|giftig|xylitol|schokolade)\b",
+        "hitzschlag": r"\b(hitzschlag|überhitzung|überhitzt)\b",
+        "pfote_entzündet": r"\b(pfote).*(entzündet|entzündung)|entzündung.*(pfote)\b",
+        "erbrechen": r"\b(erbrechen|brechen|übergeben)\b",
+        "schnittwunde": r"\b(schnitt|schnittwunde|verletzung|wunde)\b",
+        "ohrentzündung": r"\b(ohr|ohren).*(entzündung|entzündet)\b",
     }
-    if (/(fieber|fever|temperatur|temperature|erbrechen|brechen|vomit)/i.test(t)) {
-      p.details.feverVomiting = /kein|keine|ohne|no|none/i.test(t) ? false : true;
+    issues_en = {
+        "limping": r"\b(limp|limping|lame)\b",
+        "diarrhea": r"\b(diarrhea|diarrhoea)\b",
+        "poisoning": r"\b(poison|toxin|xylitol|chocolate)\b",
+        "heatstroke": r"\b(heatstroke|overheat|overheated)\b",
+        "paw_inflamed": r"\b(paw).*(inflamed|infection)|inflammation.*(paw)\b",
+        "vomiting": r"\b(vomit|vomiting|throwing\s*up)\b",
+        "cut_wound": r"\b(cut|laceration|wound|injury)\b",
+        "ear_infection": r"\b(ear|ears).*(infection|inflamed)\b",
     }
-    if (/(ruhig|apath|anders|verhält|humpel|lahm|frisst|trinkt|quiet|letharg|not\s*eating|not\s*drinking|limp|behav)/i.test(t)) {
-      p.details.behavior = t;
+    issues = issues_de if lang == "de" else issues_en
+    for code, pat in issues.items():
+        if re.search(pat, lower):
+            out["main_issue"] = code
+            break
+
+    return out
+
+# ====== Knowledge blocks (DE/EN) ===============================================================
+
+FIRST_AID = {
+    "de": {
+        "erbrechen": {
+            "title": "🤢 Erbrechen",
+            "lines": [
+                "6–12 h Futterpause, Wasser anbieten.",
+                "Dann kleine, leicht verdauliche Portionen.",
+                "Häufig/blutig/Fieber/Apathie/Welpe/Senior → Tierarzt.",
+            ],
+        },
+        "wunde_humpeln": {
+            "title": "🩹 Wunde / Humpeln",
+            "lines": [
+                "Sanft reinigen (lauwarmes Wasser), *Druck bei Blutung*.",
+                "Lecken verhindern (Body/Kragen), Ruhigstellen.",
+                "Sichtbarer Fremdkörper? Nur oberflächlich entfernen; tiefe/verschmutzte Wunden → Tierarzt.",
+                "Deutliche Lahmheit/Schwellung >24–48 h → Tierarzt.",
+            ],
+        },
+        "pfote_entzündet": {
+            "title": "🐾 Entzündete Pfote",
+            "lines": [
+                "Pfote 1–2×/Tag mit lauwarmem Wasser/Salzlösung spülen.",
+                "Sanft trocknen, trocken halten; Lecken verhindern (Kragen/Body).",
+                "Prüfe: Fremdkörper zwischen Ballen, Risse, Dorn, heißer Asphalt.",
+                "Starke Rötung/Eiter/Schmerz >24–48 h → Tierarzt (ggf. Antibiotika).",
+            ],
+        },
+        "durchfall": {
+            "title": "💩 Durchfall",
+            "lines": [
+                "Wasser anbieten; 6–12 h Futterpause, danach Schonkost (Huhn/Reis o. spezielle Diät).",
+                "Blutig/anhaltend >24–48 h/Welpe/Senior → Tierarzt.",
+            ],
+        },
+        "hitzschlag": {
+            "title": "🥵 Hitzschlag – Notfall",
+            "lines": [
+                "Sofort in den Schatten/kühlen Raum; anbieten zu trinken.",
+                "Körper langsam mit *kühlem* (nicht eiskaltem) Wasser kühlen; Luftzug/Ventilator.",
+                "Schnellstmöglich Tierarzt (lebensbedrohlich).",
+            ],
+        },
+        "ohrentzündung": {
+            "title": "👂 Ohrenentzündung",
+            "lines": [
+                "Nicht mit Wattestäbchen! Nur äußerlich reinigen (vom Tierarzt empfohlenen Reiniger).",
+                "Geruch, Rötung, Kopfschütteln, Schmerz → zeitnah Tierarzt.",
+            ],
+        },
+        "schnittwunde": {
+            "title": "🧷 Schnittwunde",
+            "lines": [
+                "Wunde vorsichtig mit Wasser spülen, sauberes Tuch → Druck bei Blutung.",
+                "Tiefe, klaffende, verschmutzte Wunde → Tierarzt (Nähen/Antibiotika).",
+            ],
+        },
+    },
+    "en": {
+        "vomiting": {
+            "title": "🤢 Vomiting",
+            "lines": [
+                "Withhold food 6–12 h; offer water.",
+                "Then small, easily digestible meals.",
+                "Frequent/bloody/fever/lethargy/puppy/senior → Vet.",
+            ],
+        },
+        "limping_wound": {
+            "title": "🩹 Wound / Limping",
+            "lines": [
+                "Rinse gently (lukewarm water), *pressure if bleeding*.",
+                "Prevent licking (cone/shirt); rest.",
+                "Visible foreign body? Remove only superficial; deep/dirty → Vet.",
+                "Marked lameness/swelling >24–48 h → Vet.",
+            ],
+        },
+        "paw_inflamed": {
+            "title": "🐾 Inflamed Paw",
+            "lines": [
+                "Rinse paw 1–2×/day with lukewarm water/saline.",
+                "Dry gently; keep dry; prevent licking (cone/shirt).",
+                "Check between pads for debris, cuts, thorns, hot asphalt burns.",
+                "Severe redness/pus/pain >24–48 h → Vet (possible antibiotics).",
+            ],
+        },
+        "diarrhea": {
+            "title": "💩 Diarrhea",
+            "lines": [
+                "Offer water; 6–12 h fast, then bland diet (boiled chicken/rice or vet diet).",
+                "Bloody/persistent >24–48 h/puppy/senior → Vet.",
+            ],
+        },
+        "heatstroke": {
+            "title": "🥵 Heatstroke – Emergency",
+            "lines": [
+                "Move to shade/cool area; offer water.",
+                "Cool body gradually with *cool* (not ice-cold) water; airflow/fan.",
+                "Go to vet ASAP (life-threatening).",
+            ],
+        },
+        "ear_infection": {
+            "title": "👂 Ear infection",
+            "lines": [
+                "No cotton swabs. Clean only outer ear with vet-approved cleanser.",
+                "Odor, redness, head-shaking, pain → see a vet soon.",
+            ],
+        },
+        "cut_wound": {
+            "title": "🧷 Cut wound",
+            "lines": [
+                "Rinse with water; clean cloth → pressure if bleeding.",
+                "Deep/gaping/dirty wounds → Vet (stitches/antibiotics).",
+            ],
+        },
+    },
+}
+
+# Map main_issue -> block IDs per language
+ISSUE_TO_BLOCK = {
+    "de": {
+        "erbrechen": "erbrechen",
+        "durchfall": "durchfall",
+        "hitzschlag": "hitzschlag",
+        "ohrentzündung": "ohrentzündung",
+        "schnittwunde": "schnittwunde",
+        "humpeln": "wunde_humpeln",
+        "pfote_entzündet": "pfote_entzündet",
+    },
+    "en": {
+        "vomiting": "vomiting",
+        "diarrhea": "diarrhea",
+        "heatstroke": "heatstroke",
+        "ear_infection": "ear_infection",
+        "cut_wound": "cut_wound",
+        "limping": "limping_wound",
+        "paw_inflamed": "paw_inflamed",
+    },
+}
+
+# ====== Prompt builders =========================================================================
+
+def join_lines(lines: List[str]) -> str:
+    return "\n• " + "\n• ".join(lines)
+
+def render_block(lang: str, block_id: str) -> str:
+    block = FIRST_AID[lang][block_id]
+    return f"{block['title']}{join_lines(block['lines'])}"
+
+def info_summary(lang: str, st: ConversationState) -> str:
+    if lang == "de":
+        parts = []
+        if st.facts.since_when:
+            parts.append(f"Seit: {st.facts.since_when}")
+        if st.facts.weight_kg:
+            parts.append(f"Gewicht: {st.facts.weight_kg:g} kg")
+        if st.facts.age_years:
+            parts.append(f"Alter (ca.): {st.facts.age_years:g}")
+        if not parts:
+            return ""
+        return "Danke. Ich habe verstanden:\n• " + "\n• ".join(parts)
+    else:
+        parts = []
+        if st.facts.since_when:
+            parts.append(f"Since: {st.facts.since_when}")
+        if st.facts.weight_kg:
+            parts.append(f"Weight: {st.facts.weight_kg:g} kg")
+        if st.facts.age_years:
+            parts.append(f"Age (approx.): {st.facts.age_years:g}")
+        if not parts:
+            return ""
+        return "Thanks. I got this:\n• " + "\n• ".join(parts)
+
+def next_questions(lang: str, st: ConversationState) -> List[Tuple[str,str]]:
+    """Return list of (slot_id, text) questions still needed.
+    slot_id ensures we don't repeat a question.
+    """
+    q = []
+    if st.symptoms.pain is None and "ask_pain" not in st.asked_slots:
+        q.append(("ask_pain", "Hat er Schmerzen? (ja/nein)" if lang=="de" else "Is there pain? (yes/no)"))
+    if st.symptoms.fever is None and "ask_fever" not in st.asked_slots:
+        q.append(("ask_fever", "Fieber? (ja/nein)" if lang=="de" else "Fever? (yes/no)"))
+    if st.symptoms.vomiting is None and "ask_vomit" not in st.asked_slots:
+        q.append(("ask_vomit", "Erbrechen? (ja/nein)" if lang=="de" else "Vomiting? (yes/no)"))
+    if st.symptoms.behavior_changed is None and "ask_behavior" not in st.asked_slots:
+        q.append(("ask_behavior", "Verhalten verändert? (ja/nein)" if lang=="de" else "Behavior changed? (yes/no)"))
+    if st.facts.age_years is None and "ask_age" not in st.asked_slots:
+        q.append(("ask_age", "Wie alt (in Jahren ca.)?" if lang=="de" else "Approx. age (years)?"))
+    if st.facts.weight_kg is None and "ask_weight" not in st.asked_slots:
+        q.append(("ask_weight", "Gewicht in kg?" if lang=="de" else "Weight in kg?"))
+    if st.facts.since_when is None and "ask_since" not in st.asked_slots:
+        q.append(("ask_since", "Seit wann besteht das Problem?" if lang=="de" else "Since when?"))
+    return q
+
+# ====== Core dialog policy ======================================================================
+
+def apply_updates(st: ConversationState, upd: Dict) -> None:
+    # facts
+    f = upd.get("facts", {})
+    for k, v in f.items():
+        setattr(st.facts, k, v)
+    # symptoms
+    s = upd.get("symptoms", {})
+    for k, v in s.items():
+        setattr(st.symptoms, k, v)
+    # main issue
+    if upd.get("main_issue"):
+        st.main_issue = upd["main_issue"]
+
+
+def decide_and_respond(user_text: str, st: ConversationState) -> str:
+    # Language detect / override
+    if user_text.strip() in ("/de", "!de"):
+        st.lang = "de"
+        return "Sprache auf Deutsch gestellt."
+    if user_text.strip() in ("/en", "!en"):
+        st.lang = "en"
+        return "Language set to English."
+
+    lang = st.lang or detect_lang(user_text)
+    # On first content, auto-detect
+    st.lang = detect_lang(user_text) if not st.last_prompt_signature else st.lang
+
+    # Parse + apply
+    upd = parse_message(user_text, st.lang)
+    apply_updates(st, upd)
+
+    # Build a signature of what's already answered to avoid repetition
+    signature = json.dumps({
+        "facts": asdict(st.facts),
+        "symptoms": asdict(st.symptoms),
+        "main_issue": st.main_issue,
+    }, sort_keys=True, ensure_ascii=False)
+
+    # If the signature didn't change and we already responded with same signature, avoid re-sending same block
+    if st.last_prompt_signature == signature:
+        # Provide a gentle nudge forward
+        if st.lang == "de":
+            return "Alles klar. Wenn du magst, beschreibe das *Hauptproblem* (z. B. „vergiftung“, „hitzschlag“, „humpelt“, „durchfall“) oder schreib „nächste schritte“."
+        else:
+            return "Got it. If you like, tell me the *main issue* (e.g., poisoning, heatstroke, limping, diarrhea) or say 'next steps'."
+
+    st.last_prompt_signature = signature
+
+    # 1) If main issue recognized, show corresponding block once
+    if st.main_issue:
+        mapping = ISSUE_TO_BLOCK.get(st.lang, {})
+        block_id = mapping.get(st.main_issue)
+        if block_id and block_id not in st.last_blocks:
+            st.last_blocks.append(block_id)
+            return render_block(st.lang, block_id)
+
+    # 2) If user explicitly asks for next steps / erste hilfe
+    trigger_next = {
+        "de": ["erste hilfe", "nächsten schritte", "was tun", "hilfe", "weiter"],
+        "en": ["first aid", "next steps", "what to do", "help", "continue"],
     }
-    setState(p,'await_profile');
-    await ctx.reply(TXT.askProfile[p.lang]);
-    return;
-  }
+    if any(kw in user_text.lower() for kw in trigger_next[st.lang]):
+        # Prefer paw inflamed or limping heuristics if present
+        preferred = None
+        if st.lang == "de" and st.main_issue == "pfote_entzündet":
+            preferred = "pfote_entzündet"
+        if st.lang == "en" and st.main_issue == "paw_inflamed":
+            preferred = "paw_inflamed"
+        if preferred:
+            bid = ISSUE_TO_BLOCK[st.lang][preferred]
+            if bid not in st.last_blocks:
+                st.last_blocks.append(bid)
+                return render_block(st.lang, bid)
+        # Fallback: choose by symptoms
+        # Vomiting true -> show vomiting block once
+        if st.symptoms.vomiting is True:
+            bid = ISSUE_TO_BLOCK[st.lang]["erbrechen" if st.lang=="de" else "vomiting"]
+            if bid not in st.last_blocks:
+                st.last_blocks.append(bid)
+                return render_block(st.lang, bid)
+        # Limping hint via pain and no vomiting -> wound/limping
+        if (st.symptoms.pain is True) and (st.symptoms.vomiting is not True):
+            bid = ISSUE_TO_BLOCK[st.lang]["humpeln" if st.lang=="de" else "limping"]
+            if bid not in st.last_blocks:
+                st.last_blocks.append(bid)
+                return render_block(st.lang, bid)
 
-  // 4) Alter/Gewicht/Seit-wann erkennen — auch wenn state irrtümlich idle
-  if (p.state === 'await_profile' || p.state === 'idle') {
-    const age = parseAge(t);
-    const weight = parseWeight(t);
-    const since = parseSince(t);
+    # 3) Ask for missing slots (but never repeat the same question)
+    qs = next_questions(st.lang, st)
+    if qs:
+        slot_id, text = qs[0]
+        st.asked_slots.append(slot_id)
+        return text
 
-    if (age || weight || since) {
-      p.details.age    = p.details.age    ?? age;
-      p.details.weight = p.details.weight ?? weight;
-      p.details.since  = p.details.since  ?? since;
+    # 4) Default guidance + summary
+    summary = info_summary(st.lang, st)
+    if st.lang == "de":
+        base = "Wenn du bereit bist, schreib einfach „erste hilfe“, „nächsten schritte“ oder beschreibe das *Hauptproblem* – ich führe dich liebevoll hindurch."
+    else:
+        base = "When you’re ready, type ‘first aid’, ‘next steps’, or describe the *main issue* – I’ll guide you gently."
+    return (summary + "\n\n" if summary else "") + base
 
-      setState(p,'idle');
-      const labelObj = ISSUE_LABELS[p.lastIssue];
-      const label = labelObj ? (labelObj[p.lang] || labelObj.de) : (p.lastIssue || '—');
+# ====== Telegram glue (optional at runtime) =====================================================
 
-      const b = TXT.summaryBullets[p.lang];
-      await ctx.reply(
-        `${TXT.summaryLead[p.lang](p.name)}\n` +
-        `${p.pet ? `${b.pet}${p.pet}\n` : ''}` +
-        `${p.lastIssue ? `${b.issue}${label}\n` : ''}` +
-        `${p.details.since ? `${b.since}${p.details.since}\n` : ''}` +
-        `${p.details.pain !== undefined ? `${b.pain}${p.details.pain ? (p.lang==='en'?'yes':'ja') : (p.lang==='en'?'no':'nein')}\n` : ''}` +
-        `${p.details.feverVomiting !== undefined ? `${b.fever}${p.details.feverVomiting ? (p.lang==='en'?'yes':'ja') : (p.lang==='en'?'no':'nein')}\n` : ''}` +
-        `${p.details.weight ? `${b.weight}${p.details.weight} kg\n` : ''}` +
-        `${p.details.age ? `${b.age}${p.details.age}\n` : ''}` +
-        TXT.summaryTail[p.lang],
-        { parse_mode:'Markdown' }
-      );
-      return;
-    }
-  }
+def run_telegram():
+    from telegram import Update
+    from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-  // 5) Letzter Fallback (ohne Loop)
-  await ctx.reply(TXT.fallback[p.lang](p.name));
-});
+    TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not TOKEN:
+        raise RuntimeError("Environment variable TELEGRAM_BOT_TOKEN is missing.")
 
-// ----------------- Start: Webhook löschen + Polling -----------------
-(async () => {
-  try {
-    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-    const me = await bot.telegram.getMe();
-    console.log('✅ Verbunden als @'+me.username);
-    await bot.launch({ polling:true });
-    console.log('🚀 Seelenpfote Bot läuft (Polling aktiv)');
-  } catch (e) {
-    console.error('❌ Startfehler:', e);
-    process.exit(1);
-  }
-})();
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+    # In-memory state per chat
+    STATE: Dict[int, ConversationState] = {}
+
+    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        cid = update.effective_chat.id
+        STATE[cid] = ConversationState()
+        lang = detect_lang(update.effective_message.text or "")
+        STATE[cid].lang = "de" if lang == "de" else "en"
+        msg = "Hallo, ich bin Seelenpfote. Beschreibe kurz, was los ist (z. B. ‚humpelt‘, ‚durchfall‘, ‚vergiftung‘)." if STATE[cid].lang=="de" else "Hi, I’m Seelenpfote. Tell me what’s going on (e.g., ‘limping’, ‘diarrhea’, ‘poisoning’)."
+        await update.message.reply_text(msg)
+
+    async def lang_de(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        cid = update.effective_chat.id
+        st = STATE.setdefault(cid, ConversationState())
+        st.lang = "de"
+        await update.message.reply_text("Sprache auf Deutsch gestellt.")
+
+    async def lang_en(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        cid = update.effective_chat.id
+        st = STATE.setdefault(cid, ConversationState())
+        st.lang = "en"
+        await update.message.reply_text("Language set to English.")
+
+    async def msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        cid = update.effective_chat.id
+        st = STATE.setdefault(cid, ConversationState())
+        text = update.effective_message.text or ""
+        resp = decide_and_respond(text, st)
+        await update.message.reply_text(resp, disable_web_page_preview=True)
+
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("de", lang_de))
+    app.add_handler(CommandHandler("en", lang_en))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg))
+
+    print("Seelenpfote MaxPack v2 – Telegram bot running…")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+# ====== Local CLI for fast testing ==============================================================
+
+def run_cli():
+    print("Seelenpfote MaxPack v2 (CLI). Tippe '/de' oder '/en' für Sprache. 'exit' zum Beenden.\n")
+    st = ConversationState()
+    while True:
+        try:
+            user = input("You: ")
+        except EOFError:
+            break
+        if not user:
+            continue
+        if user.strip().lower() in ("exit", "quit"): break
+        resp = decide_and_respond(user, st)
+        print("Bot:", resp, "\n")
+
+# ====== Minimal regression tests (invoke: python app.py --selftest) =============================
+
+CASES = [
+    {
+        "name": "No vomiting loop after negation",
+        "turns": [
+            "Er hat eine Entzündung an seiner Pfote und humpelt",
+            "Seit einer Woche. Ja, er hat Schmerzen. Kein Fieber und kein Erbrechen. Ruhiger als sonst.",
+            "nächsten schritte",
+            "kein erbrechen",  # should NOT re-trigger Erbrechen block
+        ],
+        "expect_not_contains": ["Erbrechen"],
+    },
+]
+
+def selftest():
+    ok = True
+    for case in CASES:
+        st = ConversationState()
+        outputs = []
+        for t in case["turns"]:
+            out = decide_and_respond(t, st)
+            outputs.append(out)
+        full = "\n".join(outputs)
+        for bad in case.get("expect_not_contains", []):
+            if bad in full:
+                ok = False
+                print(f"[FAIL] {case['name']} – found forbidden text: {bad}\n---\n{full}\n---")
+        for good in case.get("expect_contains", []):
+            if good not in full:
+                ok = False
+                print(f"[FAIL] {case['name']} – missing expected text: {good}\n---\n{full}\n---")
+    if ok:
+        print("All selftests passed.")
+
+# ====== Main ====================================================================================
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--cli", action="store_true", help="Run local CLI tester")
+    ap.add_argument("--selftest", action="store_true", help="Run built-in regression checks")
+    args = ap.parse_args()
+
+    if args.selftest:
+        selftest()
+    elif args.cli:
+        run_cli()
+    else:
+        run_telegram()
+
 
 
 

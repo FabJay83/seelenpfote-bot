@@ -1,4 +1,4 @@
-// index.js — Seelenpfote (Telegram) • Bild als Base64 an OpenAI (stabil) • Fotoanalyse → empathische Antwort
+// index.js — Seelenpfote (Telegram) • stabile Fotoanalyse (Base64 + korrekter MIME) → empathische Antwort
 // Railway Vars: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY
 
 require('dotenv').config();
@@ -15,7 +15,6 @@ if (!TELEGRAM_TOKEN || !OPENAI_KEY) {
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
-
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 
 bot.getMe()
@@ -40,14 +39,29 @@ async function getTelegramFileUrl(fileId) {
   return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${f.file_path}`;
 }
 
-// Holt Bild selbst, konvertiert zu Base64-Data-URL (um externe Fetch-Probleme zu vermeiden)
+// Dateiendung → Bild-MIME
+function detectImageMimeFromUrl(url) {
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
+    if (pathname.endsWith('.png')) return 'image/png';
+    if (pathname.endsWith('.webp')) return 'image/webp';
+    if (pathname.endsWith('.gif')) return 'image/gif';
+    // HEIC ist meist problematisch bei Vision-Modellen – wir fallen auf JPEG zurück
+    return 'image/jpeg';
+  } catch {
+    return 'image/jpeg';
+  }
+}
+
+// Holt Bild, baut immer eine gültige Data-URL mit **korrektem** MIME
 async function loadImageAsDataUrl(fileUrl) {
   const res = await fetch(fileUrl);
   if (!res.ok) throw new Error(`Bild-Download fehlgeschlagen: HTTP ${res.status}`);
-  const contentType = res.headers.get('content-type') || 'image/jpeg';
+  const guessedMime = detectImageMimeFromUrl(fileUrl);
   const arrayBuf = await res.arrayBuffer();
   const base64 = Buffer.from(arrayBuf).toString('base64');
-  return `data:${contentType};base64,${base64}`;
+  return `data:${guessedMime};base64,${base64}`;
 }
 
 async function analyzeImageDataUrl(dataUrl, extraPrompt = '') {
@@ -69,17 +83,14 @@ async function analyzeImageDataUrl(dataUrl, extraPrompt = '') {
           role: 'user',
           content: [
             { type: 'input_text', text: userPrompt },
-            { type: 'input_image', image_url: dataUrl }, // ← jetzt Data-URL statt Telegram-Link
+            { type: 'input_image', image_url: dataUrl },
           ],
         },
       ],
     });
     return (res.output_text || 'Keine Analyse möglich.').trim();
   } catch (e) {
-    const detail =
-      e?.response?.data?.error?.message ||
-      e?.message ||
-      String(e);
+    const detail = e?.response?.data?.error?.message || e?.message || String(e);
     console.error('❌ OpenAI-Fehler:', detail);
     throw new Error('Analyse fehlgeschlagen: ' + detail);
   }
@@ -87,7 +98,7 @@ async function analyzeImageDataUrl(dataUrl, extraPrompt = '') {
 
 // ---------- Bot-Flows ----------
 
-// Sanfter /start-Text (ohne „ich bin ein Bot“)
+// Sanfter /start‑Text (ohne „Bot“-Vorstellung)
 bot.onText(/^\/start\b/i, async (msg) => {
   const chatId = msg.chat.id;
   const hello =
@@ -106,14 +117,13 @@ bot.on('message', async (msg) => {
   try {
     await bot.sendChatAction(chatId, 'typing');
 
-    // größte Variante nehmen
     const best = msg.photo[msg.photo.length - 1];
     const fileUrl = await getTelegramFileUrl(best.file_id);
 
-    // Bild selbst laden → Base64-Data-URL
+    // Bild laden → Base64 mit sauberen MIME
     const dataUrl = await loadImageAsDataUrl(fileUrl);
 
-    // 1) Fotoanalyse (ohne Markdown senden, um Markdown-Fehler zu vermeiden)
+    // 1) Analyse (ohne Markdown senden)
     const analysis = await analyzeImageDataUrl(dataUrl, 'Kontext: Tierfoto von Besitzer:in gesendet.');
     await bot.sendMessage(chatId, `🔎 Fotoanalyse\n${analysis}`)
       .catch(err => console.error('❌ Send analysis:', err?.response?.body || err?.message || err));
@@ -160,6 +170,7 @@ bot.on('text', async (msg) => {
 });
 
 console.log('✅ Bot läuft…');
+
 
 
 

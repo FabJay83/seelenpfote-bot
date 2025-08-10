@@ -1,14 +1,31 @@
-// index.js — Seelenpfote (Empathie + Notfall-Priorität + externe cases.js)
-// CommonJS, Node >=18, dependencies: dotenv, telegraf
+// index.js — Seelenpfote (Empathie + Notfall-Priorität + Bildanalyse + Mini-Memory)
+// Requires: telegraf, dotenv, openai  |  Node >=18
+
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 
 const BOT_NAME = process.env.BOT_NAME || 'Seelenpfote';
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 let Telegraf; try { ({ Telegraf } = require('telegraf')); } catch {}
 const USE_TELEGRAM = !!TOKEN;
 
-// ---- Cases extern laden ----
-const CASES = require('./cases.js'); // <— wichtig: deine Fälle liegen in cases.js
+// ---- OpenAI (Vision) ----
+let OpenAI, openai;
+try {
+  OpenAI = require('openai');
+  if (process.env.OPENAI_API_KEY) {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+} catch (e) {
+  console.warn('[INIT] openai SDK not installed; image analysis disabled.');
+}
+
+// ---- Cases extern laden (deine 18 Fälle) ----
+// Wenn du noch keine cases.js hast, kannst du diesen require vorerst auskommentieren.
+// Empfohlen: auslagern, damit du neue Fälle leicht ergänzen kannst.
+let CASES = [];
+try { CASES = require('./cases.js'); } catch { console.warn('[INIT] cases.js nicht gefunden – nur Bildanalyse & Smalltalk aktiv.'); }
 
 /* ---------- Helpers ---------- */
 const now = () => Date.now();
@@ -34,7 +51,7 @@ function getSession(id='cli') {
     sessions.set(id, {
       lang: 'de',
       lastUser: '', lastUserAt: 0, lastBot: '', idx:{value:0},
-      state:{name:null, step:0, data:{}},
+      state:{name:null, step:0, data:{}, lastPhotoAt:0, lastPhotoUrl:null},
       pet:null
     });
   }
@@ -147,22 +164,18 @@ function maybeCapturePet(s, text) {
 function careWrap(body, s, mood = 'neutral') {
   const lang = s.lang || 'de';
   const tone = CARE[lang] || CARE.de;
-
-  // System-/Listen-Texte, Warnbanner & Begrüßungen nicht doppelt ummanteln
-  if (/^Befehle:|^Commands:|^🐾|^👋|^⚠️/.test(body)) return body;
-
+  if (/^Befehle:|^Commands:|^🐾|^👋|^⚠️/.test(body)) return body; // Systemtexte nicht doppelt
   const opener = (mood === 'emergency')
     ? tone.openEmergency[Math.floor(Math.random() * tone.openEmergency.length)]
     : tone.open[Math.floor(Math.random() * tone.open.length)];
   const reassurance = tone.reassure[Math.floor(Math.random() * tone.reassure.length)];
   const closing = tone.close[Math.floor(Math.random() * tone.close.length)];
   const petName = s.pet?.name ? ` – ${s.pet.name}` : '';
-
   return `${opener}${petName ? `,` : ''}\n\n${body}\n\n_${reassurance}_  •  ${closing}`;
 }
 
 /* ---------- Router & Utilities ---------- */
-function findCase(text, lang) { for (const c of CASES) if (c.match(text, lang)) return c; return null; }
+function findCase(text, lang) { for (const c of CASES) if (c.match && c.match(text, lang)) return c; return null; }
 function findEmergencyCase(text, lang) { for (const c of CASES) if (c.emergency && c.match(text, lang)) return c; return null; }
 
 function antiRepeat(out, s) {
@@ -175,7 +188,67 @@ function antiRepeat(out, s) {
   return out;
 }
 
-/* ---------- Reply Core (mit Empathie & Notfall-Priorität) ---------- */
+/* ---------- Mini-Memory (JSON) ---------- */
+const MEM_PATH = path.join(process.cwd(), 'memory.json');
+function saveMemory(entry) {
+  try {
+    let arr = [];
+    if (fs.existsSync(MEM_PATH)) {
+      arr = JSON.parse(fs.readFileSync(MEM_PATH, 'utf-8') || '[]');
+    }
+    arr.push(entry);
+    fs.writeFileSync(MEM_PATH, JSON.stringify(arr.slice(-500), null, 2)); // Deckel bei 500 Einträgen
+  } catch (e) {
+    console.warn('[MEM] could not write memory.json', e.message);
+  }
+}
+
+/* ---------- Bildanalyse mit OpenAI ---------- */
+async function analyzeImage(url, lang='de') {
+  if (!openai) {
+    return (lang==='en')
+      ? "I can’t analyze images right now. Please describe what you see (size, color, swelling, discharge, pain)."
+      : "Ich kann Bilder gerade nicht automatisch auswerten. Beschreibe bitte kurz: Größe, Rötung/Schwellung, nässend/trocken, Eiter/Blut, Schmerz/Belastung.";
+  }
+
+  const sys_de = `Du bist ein tiermedizinischer Triage-Assistent (Hund/Katze). Du siehst 1 Foto. 
+Antworte kurz, strukturiert und risiko-orientiert: 
+1) Mögliche Befunde (max 3 Bulletpoints)
+2) Nächste Schritte (konkret, 3–5 Punkte, Hausmittel nur sichere Basics)
+3) Warnzeichen → Tierarzt/Notdienst (knapp)
+Keine Ferndiagnosen, keine Medikamente.`;
+  const sys_en = `You are a veterinary triage assistant (dogs/cats). You see one photo. 
+Respond briefly, structured and risk-aware:
+1) Likely findings (max 3 bullets)
+2) Next steps (3–5 concrete items, only safe home measures)
+3) Red flags → vet/ER (short)
+No firm diagnoses, no drugs.`;
+
+  const prompt = (lang==='en')
+    ? "Analyze this pet photo for triage."
+    : "Bitte analysiere dieses Tierfoto für eine vorsichtige Ersteinschätzung.";
+
+  const system = (lang==='en') ? sys_en : sys_de;
+
+  const res = await openai.chat.completions.create({
+    model: process.env.VISION_MODEL || 'gpt-4o-mini',
+    temperature: 0.3,
+    messages: [
+      { role: 'system', content: system },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url } }
+        ]
+      }
+    ]
+  });
+  const out = res.choices?.[0]?.message?.content?.trim() || '';
+  return out || ((lang==='en') ? "No analysis returned." : "Keine Auswertung erhalten.");
+}
+
+/* ---------- Reply Core (mit Empathie & Notfall-Priorität + Foto-Frage-Handling) ---------- */
 function replyFor(text, s) {
   if (s.lang === null) s.lang = detectLang(text);
   const L = TXT[s.lang || 'de'];
@@ -185,9 +258,9 @@ function replyFor(text, s) {
   maybeCapturePet(s, text);
 
   // Commands
-  if (n === '/start') { s.state = { name: null, step: 0, data: {} }; return L.hello(BOT_NAME); }
+  if (n === '/start') { s.state = { name: null, step: 0, data: {}, lastPhotoAt:0, lastPhotoUrl:null }; return L.hello(BOT_NAME); }
   if (n === '/help')  return L.help;
-  if (n === '/reset') { s.state = { name: null, step: 0, data: {} }; s.lastUser=''; s.lastBot=''; return L.reset; }
+  if (n === '/reset') { s.state = { name: null, step: 0, data: {}, lastPhotoAt:0, lastPhotoUrl:null }; s.lastUser=''; s.lastBot=''; return L.reset; }
   if (n === '/langde')   { s.lang = 'de'; return "Alles klar, ich antworte auf Deutsch."; }
   if (n === '/langen')   { s.lang = 'en'; return "Got it, I’ll reply in English."; }
   if (n === '/langauto') { s.lang = null; return (detectLang(text)==='en' ? "Auto language enabled." : "Automatische Sprache aktiviert."); }
@@ -197,10 +270,21 @@ function replyFor(text, s) {
     return careWrap(rotate(TXT[s.lang || 'de'].dup, s.idx), s);
   }
 
+  // 🆕 Nutzer fragt direkt nach Foto-Auswertung
+  const askedPhotoView = /\b(was\s+siehst\s+du\s+auf\s+dem\s+bild|was\s+siehst\s+du\s+am\s+foto|what\s+do\s+you\s+see\s+in\s+the\s+photo)\b/i.test(n);
+  if (askedPhotoView && s.state.lastPhotoUrl && (now() - s.state.lastPhotoAt < 5*60*1000)) {
+    // Wir triggern aktiv die Vision-Analyse aus dem letzten Foto
+    s.state.forceAnalyze = true; // Marker für onPhoto-Flow (falls nötig)
+    const lang = s.lang || 'de';
+    return careWrap((lang==='en'
+      ? "Give me a second — I’ll analyze your last photo now. If you have details (size, swelling, discharge), tell me too."
+      : "Gib mir einen Moment – ich werte dein letztes Foto jetzt aus. Wenn du Details hast (Größe, Schwellung, nässend), schreib sie gern dazu."), s, 'followup');
+  }
+
   // 1) Notfall hat immer Vorrang (unterbricht aktive Fälle)
   const emerg = findEmergencyCase(text, s.lang || 'de');
   if (emerg) {
-    s.state = { name: null, step: 0, data: {} };
+    s.state = { name: null, step: 0, data: {}, lastPhotoAt: s.state.lastPhotoAt, lastPhotoUrl: s.state.lastPhotoUrl };
     const body = emerg.start(text, s, L);
     return careWrap(body, s, 'emergency');
   }
@@ -212,14 +296,13 @@ function replyFor(text, s) {
       const body = active.step(text, s, L);
       return careWrap(body, s, 'followup');
     }
-    // Safety reset, falls Modul fehlt
-    s.state = { name: null, step: 0, data: {} };
+    s.state = { name: null, step: 0, data: {}, lastPhotoAt: s.state.lastPhotoAt, lastPhotoUrl: s.state.lastPhotoUrl };
   }
 
-  // 3) Neuen Case starten
+  // 3) Neuen Case starten (falls vorhanden)
   const match = findCase(text, s.lang || 'de');
   if (match) {
-    s.state = { name: match.id, step: 0, data: {} };
+    s.state = { name: match.id, step: 0, data: {}, lastPhotoAt: s.state.lastPhotoAt, lastPhotoUrl: s.state.lastPhotoUrl };
     const body = match.start(text, s, L);
     return careWrap(body, s, 'concern');
   }
@@ -228,17 +311,61 @@ function replyFor(text, s) {
   return careWrap(`${rotate(L.acks, s.idx)} ${rotate(L.tails, s.idx)}`, s);
 }
 
-/* ---------- Foto-Handling ---------- */
-function onPhoto(s) {
+/* ---------- Foto-Handling (mit Vision & Memory) ---------- */
+async function onPhoto(ctx, s) {
   const L = TXT[s.lang || 'de'];
-  if (s.state.name) {
-    const active = CASES.find(c => c.id === s.state.name);
-    if (active && typeof active.photo === 'function') {
-      const body = active.photo(s, L);
-      return careWrap(body, s, 'followup');
+
+  try {
+    // 1) Bestes Foto holen
+    const photos = ctx.message.photo || [];
+    if (!photos.length) return careWrap(L.photoReceived, s, 'followup');
+    const best = photos[photos.length - 1]; // höchstauflösend
+    const fileId = best.file_id;
+
+    // 2) Telegram-File-Link erzeugen
+    const link = await ctx.telegram.getFileLink(fileId);
+    const imageUrl = String(link);
+    s.state.lastPhotoAt = now();
+    s.state.lastPhotoUrl = imageUrl;
+    s.state.data = s.state.data || {};
+    s.state.data.photos = (s.state.data.photos || 0) + 1;
+
+    // 3) Bildanalyse (falls API-Key vorhanden)
+    let analysis = null;
+    if (openai && process.env.OPENAI_API_KEY) {
+      // kurze Info zeigen
+      try { await ctx.sendChatAction('typing'); } catch {}
+      analysis = await analyzeImage(imageUrl, s.lang || 'de');
     }
+
+    // 4) Antwort bauen
+    let body;
+    if (analysis) {
+      body = analysis;
+      // mini learning-note
+      saveMemory({
+        ts: new Date().toISOString(),
+        chat: String(ctx.chat?.id || ''),
+        lang: s.lang || 'de',
+        imageUrl,
+        analysis
+      });
+    } else {
+      body =
+`Foto erhalten, danke! Damit ich es gut einschätzen kann:
+• Wo genau ist die Stelle? (Pfote/Bein/Auge/Ohren/Bauch …)
+• Größe ca. in cm, rot/geschwollen/eitrig/feucht/trocken?
+• Belastet/kratzt/leckt er daran? Geruch?
+
+Schreib mir 1–2 Punkte, ich leite dich konkret an.`;
+    }
+
+    return careWrap(body, s, analysis ? 'concern' : 'followup');
+
+  } catch (err) {
+    console.error('[PHOTO]', err);
+    return careWrap(L.photoReceived, s, 'followup');
   }
-  return careWrap(L.photoReceived, s, 'followup');
 }
 
 /* ---------- Telegram ---------- */
@@ -252,7 +379,6 @@ async function startTelegram() {
     const msg = ctx.message.text || '';
     if (s.lang === null) s.lang = detectLang(msg);
 
-    // Tipp-Animation für menschlicheres Gefühl
     try { await ctx.sendChatAction('typing'); } catch {}
 
     let out = replyFor(msg, s);
@@ -268,10 +394,8 @@ async function startTelegram() {
   bot.on('photo', async (ctx) => {
     const id = String(ctx.chat.id);
     const s = getSession(id);
-
     try { await ctx.sendChatAction('typing'); } catch {}
-
-    const out = onPhoto(s);
+    const out = await onPhoto(ctx, s);
     s.lastBot = norm(out);
     ctx.reply(out).catch(err => console.error('[TELEGRAM send error]', err));
   });
@@ -293,7 +417,7 @@ function startCLI() {
   console.log(`${BOT_NAME} – CLI. Tippe /help.`);
   rl.prompt();
 
-  rl.on('line', (line) => {
+  rl.on('line', async (line) => {
     const msg = line || '';
     if (s.lang === null) s.lang = detectLang(msg);
     let out = replyFor(msg, s);
@@ -321,6 +445,7 @@ function startCLI() {
     process.exit(1);
   }
 })();
+
 
 
 

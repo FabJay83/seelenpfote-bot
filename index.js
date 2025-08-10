@@ -1,28 +1,31 @@
-// index.js – Seelenpfote Bot (Debug Build)
-// CLI/Telegram, DE/EN Auto, Anti-Repetition, FORCE_CLI support, lautes Logging
+// index.js – Seelenpfote Bot (Debug + Smoke Build)
+// Telegram ODER CLI, DE/EN Auto, Anti-Repetition, FORCE_CLI & Auto-SMOKE.
+// Läuft stabil in Containern (stdin.isTTY=false -> Smoke-Test statt sofort beenden).
 
 require('dotenv').config();
 
 const BOT_NAME = process.env.BOT_NAME || 'Seelenpfote';
-const VERSION = '1.1.2';
+const VERSION = '1.1.3';
 
-// --- Telegram optional laden
+// --- Telegram optional laden (für CLI nicht zwingend)
 let Telegraf;
-try { ({ Telegraf } = require('telegraf')); } catch { /* ok for CLI */ }
+try { ({ Telegraf } = require('telegraf')); } catch { /* optional */ }
 
-// --- Runtime-Flags
+// --- Runtime-Flags / Env
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const FORCE_CLI = process.env.FORCE_CLI === '1';
+const RUN_SMOKE = process.env.RUN_SMOKE === '1';
 const USE_TELEGRAM = !FORCE_CLI && !!TOKEN;
 
-// --- lautes Boot-Logging
+// --- laute Boot-Logs
 console.log(`[BOOT] ${BOT_NAME} v${VERSION}`);
 console.log(`[BOOT] FORCE_CLI=${FORCE_CLI}`);
 console.log(`[BOOT] USE_TELEGRAM=${USE_TELEGRAM}`);
 console.log(`[BOOT] TOKEN_LEN=${TOKEN ? TOKEN.length : 0}`);
+console.log(`[BOOT] RUN_SMOKE=${RUN_SMOKE}`);
 console.log(`[BOOT] stdin.isTTY=${!!process.stdin.isTTY}`);
 
-// --- einfache DE/EN-Erkennung (ohne externes ESM)
+// --- einfache DE/EN-Erkennung (ohne externe ESM-Libs)
 const detectLang = (raw) => {
   const text = (raw || '').toLowerCase();
   if (!text.trim()) return 'de';
@@ -46,7 +49,7 @@ const detectLang = (raw) => {
   return asciiRatio > 0.9 ? 'en' : 'de';
 };
 
-// --- Utils & Session
+// --- Utils & Sessions
 const now = () => Date.now();
 const norm = (s) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
 const rotatePick = (arr, idxRef) => arr[(idxRef.value++ % arr.length + arr.length) % arr.length];
@@ -111,7 +114,7 @@ const TXT = {
   }
 };
 
-// --- Logik
+// --- Kernlogik
 function replyFor(text, session) {
   const forced = session.lang;
   const lang = forced || detectLang(text);
@@ -196,12 +199,39 @@ function startCLI() {
     process.exit(0);
   });
 
-  // Support: non‑TTY piping -> exit when stdin ends
+  // Non‑TTY (z. B. Container ohne Interaktivität) -> sauber beenden
   if (!process.stdin.isTTY) {
     process.stdin.on('end', () => {
       setTimeout(() => process.exit(0), 50);
     });
   }
+}
+
+// --- Auto-SMOKE (für Container/CI)
+async function runSmokeAndExit() {
+  const id = 'smoke';
+  const s = getSession(id);
+  const inputs = [
+    '/start',
+    '/help',
+    'Hallo, ich brauche Hilfe',
+    'Hallo, ich brauche Hilfe', // Duplikat -> Anti-Repetition
+    '/langen',
+    'I need help',
+    '/reset'
+  ];
+  console.log('[SMOKE] starting…');
+  for (const line of inputs) {
+    const out = replyFor(line, s);
+    const final = postProcessNoRepeat(out, s);
+    s.lastUser = norm(line);
+    s.lastUserAt = Date.now();
+    s.lastBot = final;
+    console.log(`[IN ] ${line}`);
+    console.log(`[OUT] ${final}`);
+  }
+  console.log('[SMOKE] done.');
+  process.exit(0);
 }
 
 // --- Start
@@ -210,16 +240,20 @@ function startCLI() {
     if (USE_TELEGRAM) {
       console.log('[START] Telegram mode…');
       await startTelegram();
+    } else if (RUN_SMOKE || !process.stdin.isTTY) {
+      console.log('[START] SMOKE mode…');
+      await runSmokeAndExit();
     } else {
       console.log('[START] CLI mode…');
       startCLI();
     }
   } catch (err) {
     console.error('[FATAL STARTUP ERROR]', err && err.stack || err);
-    console.log('[RECOVERY] Falling back to CLI.');
-    try { startCLI(); } catch (e) { console.error('[CLI FAIL]', e); process.exit(1); }
+    console.log('[RECOVERY] Falling back to SMOKE.');
+    try { await runSmokeAndExit(); } catch (e) { console.error('[SMOKE FAIL]', e); process.exit(1); }
   }
 })();
+
 
 
 

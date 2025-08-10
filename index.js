@@ -1,36 +1,30 @@
-// index.js — Seelenpfote (Telegram) • Fotoanalyse zuerst, dann empathische Antwort
-// Läuft mit Railway-Variablen: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY
-
+// index.js — Seelenpfote (Telegram) • robuste Fehlerausgabe
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const OpenAI = require('openai');
 
-// --- ENV (mit Trim gegen unsichtbare Leerzeichen) ---
 const TELEGRAM_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
 const OPENAI_KEY     = (process.env.OPENAI_API_KEY || '').trim();
 
 if (!TELEGRAM_TOKEN || !OPENAI_KEY) {
-  console.error('❌ Fehlt: TELEGRAM_BOT_TOKEN oder OPENAI_API_KEY (Railway → Variables setzen)');
+  console.error('❌ Fehlt: TELEGRAM_BOT_TOKEN oder OPENAI_API_KEY');
   process.exit(1);
 }
 
-// --- Clients ---
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-// Webhook wegräumen, damit kein 409/Conflict stört (z. B. nach früherem Hosting)
-bot.deleteWebHook({ drop_pending_updates: true }).catch(() => {});
+bot.deleteWebHook({ drop_pending_updates: true }).catch(()=>{});
 
 const openai = new OpenAI({ apiKey: OPENAI_KEY });
 
-// --- Sofortiger Token-Check: bricht sauber ab, wenn Token ungültig ist ---
+// Token Selbsttest
 bot.getMe()
   .then(me => console.log('🤖 Eingeloggt als @' + me.username))
   .catch(err => {
-    const msg = (err && err.response && err.response.body) ? JSON.stringify(err.response.body) : (err?.message || String(err));
-    console.error('❌ Telegram-Token ungültig oder nicht akzeptiert:', msg);
+    console.error('❌ Telegram-Token ungültig:', err?.response?.body || err?.message || err);
     process.exit(1);
   });
 
-// ---------- Helpers ----------
+// Helpers
 function careReply({ intro, bullets = [], outro }) {
   let msg = '';
   if (intro) msg += `${intro}\n\n`;
@@ -41,17 +35,18 @@ function careReply({ intro, bullets = [], outro }) {
 
 async function getTelegramFileUrl(fileId) {
   const f = await bot.getFile(fileId);
-  return `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${f.file_path}`;
+  const url = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${f.file_path}`;
+  return url;
 }
 
 async function analyzeImageUrl(imageUrl, extraPrompt = '') {
   const systemNote =
     'Du bist eine tiermedizinische Assistenz. Liefere eine kurze, sachliche Bildbeschreibung mit möglichen Auffälligkeiten. ' +
-    'Keine Diagnose, keine Medikamente, kein Tierarzt-Ersatz. Klare, neutrale Sprache.';
+    'Keine Diagnose/Medikamente. Klare, neutrale Sprache.';
 
   const userPrompt =
     (extraPrompt?.trim() ? extraPrompt.trim() + '\n\n' : '') +
-    'Beschreibe knapp, was auf dem Foto zu sehen ist. Wenn möglich: Verletzungen/Schwellungen, Blutungen, Sekret, Haltung, Umgebung. ' +
+    'Beschreibe knapp, was auf dem Foto zu sehen ist (Verletzungen/Schwellungen, Blutungen, Sekret, Haltung, Umgebung). ' +
     'Maximal 5 kurze Sätze.';
 
   const res = await openai.responses.create({
@@ -68,10 +63,8 @@ async function analyzeImageUrl(imageUrl, extraPrompt = '') {
     ],
   });
 
-  return (res.output_text || 'Keine Analyse möglich.').trim();
+  return (res.output_text || '').trim();
 }
-
-// ---------- Bot-Flows ----------
 
 // /start
 bot.onText(/^\/start\b/i, async (msg) => {
@@ -83,25 +76,37 @@ bot.onText(/^\/start\b/i, async (msg) => {
   await bot.sendMessage(chatId, hello);
 });
 
-// Eingehende Nachrichten: Wenn Foto → Foto-Flow
+// Foto‑Flow
 bot.on('message', async (msg) => {
-  try {
-    const chatId = msg.chat.id;
-    const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
-    if (!hasPhoto) return; // Text wird im separaten Text-Handler betreut
+  const chatId = msg.chat.id;
+  const hasPhoto = Array.isArray(msg.photo) && msg.photo.length > 0;
+  if (!hasPhoto) return;
 
+  try {
     await bot.sendChatAction(chatId, 'typing');
 
-    // größte Variante nehmen
     const best = msg.photo[msg.photo.length - 1];
     const fileUrl = await getTelegramFileUrl(best.file_id);
+    console.log('📸 Telegram file URL:', fileUrl);
 
-    // 1) Fotoanalyse
-    const analysis = await analyzeImageUrl(fileUrl, 'Kontext: Tierfoto von Besitzer:in gesendet.');
-    await bot.sendMessage(chatId, `🔎 *Fotoanalyse*\n${analysis}`, { parse_mode: 'Markdown' });
+    // 1) Analyse
+    let analysisText = '';
+    try {
+      analysisText = await analyzeImageUrl(fileUrl, 'Kontext: Tierfoto von Besitzer:in gesendet.');
+      if (!analysisText) throw new Error('Leere Analyseantwort von OpenAI.');
+      await bot.sendMessage(chatId, `🔎 *Fotoanalyse*\n${analysisText}`, { parse_mode: 'Markdown' });
+    } catch (aiErr) {
+      console.error('❌ OpenAI-Analysefehler:', aiErr?.response?.data || aiErr?.message || aiErr);
+      await bot.sendMessage(
+        chatId,
+        '⚠️ Ich konnte das Foto gerade nicht auswerten (Serverantwort fehlte oder war ungültig). ' +
+        'Bitte schick das Bild noch einmal oder ein zweites Foto aus etwas anderem Winkel.'
+      );
+      return; // empathische Antwort nur senden, wenn Analyse geklappt hat
+    }
 
-    // 2) Empathische Antwort im schönen Stil
-    const reply = careReply({
+    // 2) Empathie
+    const friendly = careReply({
       intro: 'Ich weiß, das kann belastend sein – ich bin bei dir 🐾❤️\nDamit ich dir gezielt helfen kann, schreib mir bitte kurz:',
       bullets: [
         '🐶 Wo ist die Stelle genau? (Pfote, Bein, Auge, Bauch …)',
@@ -111,17 +116,17 @@ bot.on('message', async (msg) => {
       ],
       outro: 'Schick mir 1–2 Punkte – ich leite dich Schritt für Schritt an. Du machst das super 💪\nIch bleibe hier, bis wir es geschafft haben.',
     });
-
-    await bot.sendMessage(chatId, reply);
+    await bot.sendMessage(chatId, friendly);
   } catch (err) {
-    console.error('❌ Foto-Flow Fehler:', err?.message || err);
+    console.error('❌ Foto-Flow Fehler (außen):', err?.message || err);
+    await bot.sendMessage(chatId, '⚠️ Uff, da ist gerade etwas schiefgelaufen. Versuch es bitte kurz nochmal – ich bleibe hier.');
   }
 });
 
-// Reine Textnachrichten (ohne Foto)
+// Text‑Fallback
 bot.on('text', async (msg) => {
-  if (/^\/start\b/i.test(msg.text)) return; // /start schon oben behandelt
-  if (msg.photo && msg.photo.length) return; // Falls Telegram es doch doppelt triggert
+  if (/^\/start\b/i.test(msg.text)) return;
+  if (msg.photo && msg.photo.length) return;
 
   const chatId = msg.chat.id;
   const askForPhoto = careReply({
@@ -139,6 +144,7 @@ bot.on('text', async (msg) => {
 });
 
 console.log('✅ Bot läuft…');
+
 
 
 

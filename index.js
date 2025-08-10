@@ -1,151 +1,220 @@
 // index.js
-// Seelenpfote Bot – Node.js Edition (Telegram + CLI Fallback)
-// Features: DE/EN Auto-Detection, /start, /help, simple SOS-Hilfe, sauberes Shutdown
+// Seelenpfote Bot – Node.js (Telegram + CLI), DE/EN Auto, Anti-Repetition
 
 require('dotenv').config();
 
+let Telegraf;
+try { ({ Telegraf } = require('telegraf')); } catch { /* CLI fallback */ }
+
+const BOT_NAME = process.env.BOT_NAME || 'Seelenpfote';
+const VERSION = '1.1.1';
 const USE_TELEGRAM = !!process.env.TELEGRAM_BOT_TOKEN;
-const BOT_NAME = process.env.BOT_NAME || "Seelenpfote";
-const VERSION = "1.0.0";
 
-const { francMin } = require('franc-min'); // Sprache erkennen
-const iso6393to1 = (iso3) => ({ deu: 'de', eng: 'en' }[iso3] || 'en');
+// -------- Sprach-Erkennung ohne externe Lib ---------------------------------
+const detectLang = (raw) => {
+  const text = (raw || '').toLowerCase();
+  if (!text.trim()) return 'de';
+  if (/[äöüß]/.test(text)) return 'de';
+  const deHits = [
+    /\b(und|oder|nicht|auch|ein(e|en|er)?|der|die|das|mit|ohne|bitte|danke|hilfe)\b/,
+    /\b(warum|wieso|wie|was|wann|wo|welch\w*)\b/,
+    /\b(ich|du|er|sie|wir|ihr|mein|dein|sein|ihr)\b/,
+    /\b(zum|zur|im|am|vom|beim)\b/,
+    /(ung|keit|chen|lich|isch)\b/
+  ].some((re) => re.test(text));
+  if (deHits) return 'de';
+  const enHits = [
+    /\b(the|and|or|not|also|with|without|please|thanks|help)\b/,
+    /\b(why|how|what|when|where|which|who)\b/,
+    /\b(i|you|he|she|we|they|my|your|his|her|their)\b/,
+    /(ing|ed|ly)\b/
+  ].some((re) => re.test(text));
+  if (enHits) return 'en';
+  const asciiRatio = (text.replace(/[^\x00-\x7F]/g, '').length) / text.length;
+  return asciiRatio > 0.9 ? 'en' : 'de';
+};
 
-function detectLang(text) {
-  // franc gibt ISO-639-3 zurück (z.B. 'deu', 'eng')
-  try {
-    const code3 = francMin(text || '');
-    return iso6393to1(code3);
-  } catch {
-    return 'en';
+// -------- Hilfsfunktionen ---------------------------------------------------
+const now = () => Date.now();
+const norm = (s) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+const rotatePick = (arr, idxRef) => arr[(idxRef.value++ % arr.length + arr.length) % arr.length];
+
+// -------- Session Store -----------------------------------------------------
+const sessions = new Map();
+function getSession(id = 'cli') {
+  if (!sessions.has(id)) {
+    sessions.set(id, {
+      lang: null,
+      lastBot: '',
+      lastUser: '',
+      lastUserAt: 0,
+      variantIndex: { value: 0 }
+    });
   }
+  return sessions.get(id);
 }
 
-// --- Antworten in DE/EN ------------------------------------------------------
-function t(lang, key) {
-  const de = {
-    hello: `Hallo! Ich bin ${BOT_NAME}. Sende mir eine Nachricht oder /help.`,
-    help: `Befehle:
+// -------- Texte --------------------------------------------------------------
+const TXT = {
+  de: {
+    hello: (name) => `Hallo! Ich bin ${name}. Sende mir eine Nachricht oder /help.`,
+    help:
+`Befehle:
 /start – Begrüßung
 /help – Hilfe anzeigen
-/sos – Erste Hilfe Tipps (Hund/Katze, allgemein)
-/langde – erzwungen Deutsch
-/langen – erzwungen Englisch`,
-    sos: `Erste Hilfe (allgemein, kurz):
+/sos – Erste-Hilfe Tipps
+/langde – Deutsch erzwingen
+/langen – Englisch erzwingen
+/reset – Verlauf löschen`,
+    sos:
+`Erste Hilfe:
 1) Ruhe bewahren, Tier sichern.
-2) Sichtbare Blutung: sanften Druck mit sauberer Kompresse.
-3) Atem-/Kreislauf prüfen; bei Ausfall Tierarzt-Notdienst anrufen.
+2) Blutung: sanften Druck mit Kompresse.
+3) Atmung/Kreislauf prüfen; ggf. Notfalltierarzt anrufen.
 4) Keine menschlichen Medikamente geben.
-5) Auf dem Weg zum Tierarzt warm halten.`,
-    switched: `Alles klar, ich antworte ab jetzt auf Deutsch.`,
-    bye: `Bis bald!`
-  };
-
-  const en = {
-    hello: `Hi! I’m ${BOT_NAME}. Send me a message or /help.`,
-    help: `Commands:
+5) Warm halten.`,
+    dupUser: [
+      "Das habe ich gerade beantwortet.",
+      "Gleiche Eingabe erkannt.",
+      "Das hatten wir gerade."
+    ],
+    ack: [
+      (v) => `Alles klar. (${BOT_NAME} v${v})`,
+      (v) => `Verstanden. (${BOT_NAME} v${v})`,
+      (v) => `Okay! (${BOT_NAME} v${v})`
+    ],
+    switchedDe: "Alles klar, ab jetzt Deutsch.",
+    switchedEn: "Alles klar, ab jetzt Englisch.",
+    bye: "Bis bald!",
+    reset: "Verlauf gelöscht."
+  },
+  en: {
+    hello: (name) => `Hi! I'm ${name}. Send me a message or /help.`,
+    help:
+`Commands:
 /start – greeting
 /help – show help
-/sos – first-aid tips (pet, general)
+/sos – first aid
 /langde – force German
-/langen – force English`,
-    sos: `First aid (quick):
-1) Stay calm, secure the pet.
-2) Visible bleeding: gentle pressure with a clean gauze.
-3) Check breathing/circulation; call emergency vet if needed.
-4) Do not give human meds.
-5) Keep warm on the way to the vet.`,
-    switched: `Got it, I’ll reply in English from now on.`,
-    bye: `See you!`
-  };
-
-  const dict = lang === 'de' ? de : en;
-  return dict[key];
-}
-
-// --- Kernlogik: eine Nachricht -> Antwort -----------------------------------
-function buildReply(msg, forcedLang) {
-  const lang = forcedLang || detectLang(msg);
-  const text = msg.trim();
-
-  // einfache Intents
-  const lower = text.toLowerCase();
-  if (lower === '/start') return t(lang, 'hello');
-  if (lower === '/help') return t(lang, 'help');
-  if (lower === '/sos') return t(lang, 'sos');
-  if (lower === '/langde') { session.lang = 'de'; return t('de', 'switched'); }
-  if (lower === '/langen') { session.lang = 'en'; return t('en', 'switched'); }
-
-  // Standard: freundliche Antwort + Echo
-  if (lang === 'de') {
-    return `Verstanden. (${BOT_NAME} v${VERSION})\nDu hast gesagt: “${text}”`;
-  } else {
-    return `Got it. (${BOT_NAME} v${VERSION})\nYou said: “${text}”`;
+/langen – force English
+/reset – clear history`,
+    sos:
+`First aid:
+1) Stay calm, secure pet.
+2) Bleeding: gentle pressure with gauze.
+3) Check breathing/circulation; call emergency vet.
+4) No human meds.
+5) Keep warm.`,
+    dupUser: [
+      "I just answered that.",
+      "Same input detected.",
+      "We just covered that."
+    ],
+    ack: [
+      (v) => `Got it. (${BOT_NAME} v${v})`,
+      (v) => `Understood. (${BOT_NAME} v${v})`,
+      (v) => `Okay! (${BOT_NAME} v${v})`
+    ],
+    switchedDe: "Got it, German from now on.",
+    switchedEn: "Got it, English from now on.",
+    bye: "See you!",
+    reset: "History cleared."
   }
+};
+
+// -------- Kernlogik ---------------------------------------------------------
+function replyFor(text, session) {
+  const forced = session.lang;
+  const lang = forced || detectLang(text);
+  const L = TXT[lang];
+  const low = norm(text);
+
+  if (low === '/start') return L.hello(BOT_NAME);
+  if (low === '/help') return L.help;
+  if (low === '/sos') return L.sos;
+  if (low === '/langde') { session.lang = 'de'; return TXT.de.switchedDe; }
+  if (low === '/langen') { session.lang = 'en'; return TXT.en.switchedEn; }
+  if (low === '/reset') { session.lastBot = ''; session.lastUser = ''; return L.reset; }
+
+  if (low && low === session.lastUser && now() - session.lastUserAt < 10000) {
+    return rotatePick(L.dupUser, session.variantIndex);
+  }
+
+  const ack = rotatePick(L.ack, session.variantIndex)(VERSION);
+  const tail = (lang === 'de') ? "Wie kann ich helfen?" : "How can I help?";
+  return `${ack}\n${tail}`;
 }
 
-// --- Session (nur Sprachpräferenz) ------------------------------------------
-const session = { lang: null };
+function postProcessNoRepeat(out, session) {
+  if (norm(out) === norm(session.lastBot)) {
+    const addon = (session.lang === 'de') ? "Noch etwas?" : "Anything else?";
+    return out + "\n" + addon;
+  }
+  return out;
+}
 
-// --- Telegram-Modus ----------------------------------------------------------
+// -------- Telegram -----------------------------------------------------------
 async function startTelegram() {
-  const { Telegraf } = require('telegraf');
   const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-  bot.start((ctx) => ctx.reply(t(session.lang || detectLang('hi'), 'hello')));
-  bot.help((ctx) => ctx.reply(t(session.lang || detectLang('help'), 'help')));
-
   bot.on('text', (ctx) => {
-    const message = ctx.message.text || '';
-    const reply = buildReply(message, session.lang);
-    ctx.reply(reply);
+    const id = String(ctx.chat.id);
+    const s = getSession(id);
+    const msg = ctx.message.text || '';
+
+    const out = replyFor(msg, s);
+    const final = postProcessNoRepeat(out, s);
+
+    s.lastUser = norm(msg);
+    s.lastUserAt = now();
+    s.lastBot = final;
+
+    ctx.reply(final);
   });
 
-  bot.launch().then(() => {
-    console.log(`[${BOT_NAME}] Telegram-Bot läuft. Drücke CTRL+C zum Beenden.`);
-  });
-
-  // Graceful shutdown
+  await bot.launch();
+  console.log(`[${BOT_NAME}] Telegram-Bot läuft.`);
   process.once('SIGINT', () => { bot.stop('SIGINT'); process.exit(0); });
   process.once('SIGTERM', () => { bot.stop('SIGTERM'); process.exit(0); });
 }
 
-// --- CLI-Fallback ------------------------------------------------------------
+// -------- CLI ---------------------------------------------------------------
 function startCLI() {
+  const id = 'cli';
+  const s = getSession(id);
   const rl = require('readline').createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: `${BOT_NAME}> `
+    input: process.stdin, output: process.stdout, prompt: `${BOT_NAME}> `
   });
 
-  console.log(`${BOT_NAME} (CLI) gestartet. Tippe /help für Hilfe, CTRL+C zum Beenden.`);
+  console.log(`${BOT_NAME} v${VERSION} – CLI-Modus.`);
   rl.prompt();
 
   rl.on('line', (line) => {
-    const text = line.trim();
-    if (text === '/quit' || text === '/exit') {
-      console.log(t(session.lang || 'de', 'bye'));
-      rl.close();
-      return;
-    }
-    const reply = buildReply(text, session.lang);
-    console.log(reply);
+    const msg = line || '';
+    const out = replyFor(msg, s);
+    const final = postProcessNoRepeat(out, s);
+
+    s.lastUser = norm(msg);
+    s.lastUserAt = now();
+    s.lastBot = final;
+
+    console.log(final);
     rl.prompt();
   });
 
-  rl.on('close', () => process.exit(0));
+  rl.on('close', () => {
+    console.log((s.lang === 'en') ? TXT.en.bye : TXT.de.bye);
+    process.exit(0);
+  });
 }
 
-// --- Bootstrap ---------------------------------------------------------------
+// -------- Start -------------------------------------------------------------
 (async () => {
-  console.log(`${BOT_NAME} v${VERSION} – Node.js`);
-  if (USE_TELEGRAM) {
-    await startTelegram();
-  } else {
-    console.log("Kein TELEGRAM_BOT_TOKEN gefunden – starte CLI-Fallback.");
-    startCLI();
-  }
+  console.log(`${BOT_NAME} v${VERSION} gestartet`);
+  if (USE_TELEGRAM) await startTelegram();
+  else { console.log("Kein Telegram-Token, starte CLI."); startCLI(); }
 })();
+
 
 
 

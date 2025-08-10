@@ -1,90 +1,101 @@
-// index.js – Seelenpfote Bot (Debug + Smoke Build)
-// Telegram ODER CLI, DE/EN Auto, Anti-Repetition, FORCE_CLI & Auto-SMOKE.
-// Läuft stabil in Containern (stdin.isTTY=false -> Smoke-Test statt sofort beenden).
+// index.js — Seelenpfote Bot v1.3.0 (Telegram + CLI)
+// DE als Standard, Auto-DE/EN, Anti-Repetition, sauberes Session-Handling.
 
 require('dotenv').config();
 
 const BOT_NAME = process.env.BOT_NAME || 'Seelenpfote';
-const VERSION = '1.1.3';
-
-// --- Telegram optional laden (für CLI nicht zwingend)
-let Telegraf;
-try { ({ Telegraf } = require('telegraf')); } catch { /* optional */ }
-
-// --- Runtime-Flags / Env
+const VERSION = '1.3.0';
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const FORCE_CLI = process.env.FORCE_CLI === '1';
-const RUN_SMOKE = process.env.RUN_SMOKE === '1';
-const USE_TELEGRAM = !FORCE_CLI && !!TOKEN;
 
-// --- laute Boot-Logs
-console.log(`[BOOT] ${BOT_NAME} v${VERSION}`);
-console.log(`[BOOT] FORCE_CLI=${FORCE_CLI}`);
-console.log(`[BOOT] USE_TELEGRAM=${USE_TELEGRAM}`);
-console.log(`[BOOT] TOKEN_LEN=${TOKEN ? TOKEN.length : 0}`);
-console.log(`[BOOT] RUN_SMOKE=${RUN_SMOKE}`);
-console.log(`[BOOT] stdin.isTTY=${!!process.stdin.isTTY}`);
+let Telegraf;
+try { ({ Telegraf } = require('telegraf')); } catch { /* optional für CLI */ }
 
-// --- einfache DE/EN-Erkennung (ohne externe ESM-Libs)
-const detectLang = (raw) => {
+const USE_TELEGRAM = !!TOKEN;
+
+// ---------- Sprach-Erkennung (ohne externe Lib) ----------
+function detectLang(raw) {
   const text = (raw || '').toLowerCase();
-  if (!text.trim()) return 'de';
-  if (/[äöüß]/.test(text)) return 'de';
+  if (!text.trim()) return 'de';                   // Standard: Deutsch
+  if (/[äöüß]/.test(text)) return 'de';           // starke DE-Signale
   const deHits = [
-    /\b(und|oder|nicht|auch|ein(e|en|er)?|der|die|das|mit|ohne|bitte|danke|hilfe)\b/,
-    /\b(warum|wieso|wie|was|wann|wo|welch\w*)\b/,
-    /\b(ich|du|er|sie|wir|ihr|mein|dein|sein|ihr)\b/,
-    /\b(zum|zur|im|am|vom|beim)\b/,
+    /\b(und|oder|nicht|auch|ein(e|en|er)?|der|die|das|mit|ohne|bitte|danke|hilfe|warum|wieso|wie|was|wann|wo|welch\w*|mein|dein|sein|ihr|zum|zur|im|am|vom|beim)\b/,
     /(ung|keit|chen|lich|isch)\b/
-  ].some((re) => re.test(text));
+  ].some((r) => r.test(text));
   if (deHits) return 'de';
   const enHits = [
-    /\b(the|and|or|not|also|with|without|please|thanks|help)\b/,
-    /\b(why|how|what|when|where|which|who)\b/,
-    /\b(i|you|he|she|we|they|my|your|his|her|their)\b/,
+    /\b(the|and|or|not|with|without|please|thanks|help|why|how|what|when|where|which|who|i|you|he|she|we|they|my|your|his|her|their)\b/,
     /(ing|ed|ly)\b/
-  ].some((re) => re.test(text));
+  ].some((r) => r.test(text));
   if (enHits) return 'en';
   const asciiRatio = (text.replace(/[^\x00-\x7F]/g, '').length) / text.length;
   return asciiRatio > 0.9 ? 'en' : 'de';
-};
+}
 
-// --- Utils & Sessions
+// ---------- Utils ----------
 const now = () => Date.now();
 const norm = (s) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
-const rotatePick = (arr, idxRef) => arr[(idxRef.value++ % arr.length + arr.length) % arr.length];
+const rotate = (arr, idx) => arr[(idx.value++ % arr.length + arr.length) % arr.length];
 
+// ---------- Sessions ----------
 const sessions = new Map();
 function getSession(id = 'cli') {
   if (!sessions.has(id)) {
-    sessions.set(id, { lang: null, lastBot: '', lastUser: '', lastUserAt: 0, variantIndex: { value: 0 } });
+    sessions.set(id, {
+      lang: null,            // 'de'|'en'|null (auto)
+      lastUser: '',          // normalisierter letzter Usertext
+      lastUserAt: 0,
+      lastBot: '',           // letzter gesendeter Bottext (normalisiert)
+      lastIntent: '',        // Schlüssel der letzten Intent-Antwort
+      lastIntentAt: 0,
+      idx: { value: 0 }
+    });
   }
   return sessions.get(id);
 }
 
-// --- Texte
+// ---------- Textblöcke ----------
 const TXT = {
   de: {
-    hello: (n) => `Hallo! Ich bin ${n}. Sende mir eine Nachricht oder /help.`,
+    hello: (n) => `Hallo! Ich bin ${n}. Schreib mir eine Nachricht oder /help.`,
     help:
 `Befehle:
 /start – Begrüßung
 /help – Hilfe anzeigen
-/sos – Erste-Hilfe Tipps
+/sos – Erste Hilfe kurz
 /langde – Deutsch erzwingen
 /langen – Englisch erzwingen
+/langauto – automatische Spracherkennung
 /reset – Verlauf löschen`,
     sos:
-`Erste Hilfe:
+`Erste Hilfe (kurz):
 1) Ruhe bewahren, Tier sichern.
 2) Blutung: sanften Druck mit Kompresse.
 3) Atmung/Kreislauf prüfen; ggf. Notfalltierarzt anrufen.
 4) Keine menschlichen Medikamente geben.
 5) Warm halten.`,
-    dupUser: ["Das habe ich gerade beantwortet.", "Gleiche Eingabe erkannt.", "Das hatten wir gerade."],
-    ack: [(v)=>`Alles klar. (${BOT_NAME} v${v})`, (v)=>`Verstanden. (${BOT_NAME} v${v})`, (v)=>`Okay! (${BOT_NAME} v${v})`],
-    switchedDe: "Alles klar, ab jetzt Deutsch.",
-    switchedEn: "Alles klar, ab jetzt Englisch.",
+    acks: [
+      (v)=>`Alles klar. (${BOT_NAME} v${v})`,
+      (v)=>`Verstanden. (${BOT_NAME} v${v})`,
+      (v)=>`Okay! (${BOT_NAME} v${v})`
+    ],
+    tail: [
+      "Wie kann ich helfen?",
+      "Womit kann ich dir helfen?",
+      "Was brauchst du genau?"
+    ],
+    dupUser: [
+      "Das habe ich gerade beantwortet.",
+      "Gleiche Eingabe erkannt.",
+      "Wir hatten das eben schon."
+    ],
+    cooldown: [
+      "Schon erledigt 👍",
+      "Alles klar, weiter geht’s.",
+      "Hab dich gehört."
+    ],
+    switchedDe: "Alles klar, ich antworte auf Deutsch.",
+    switchedEn: "Alles klar, ich antworte auf Englisch.",
+    switchedAuto: "Automatische Spracherkennung ist wieder aktiv.",
     bye: "Bis bald!",
     reset: "Verlauf gelöscht."
   },
@@ -94,57 +105,112 @@ const TXT = {
 `Commands:
 /start – greeting
 /help – show help
-/sos – first aid
+/sos – quick first aid
 /langde – force German
 /langen – force English
+/langauto – auto language
 /reset – clear history`,
     sos:
-`First aid:
-1) Stay calm, secure pet.
+`First aid (quick):
+1) Stay calm, secure the pet.
 2) Bleeding: gentle pressure with gauze.
-3) Check breathing/circulation; call emergency vet.
+3) Check breathing/circulation; call an emergency vet.
 4) No human meds.
 5) Keep warm.`,
-    dupUser: ["I just answered that.", "Same input detected.", "We just covered that."],
-    ack: [(v)=>`Got it. (${BOT_NAME} v${v})`, (v)=>`Understood. (${BOT_NAME} v${v})`, (v)=>`Okay! (${BOT_NAME} v${v})`],
-    switchedDe: "Got it, German from now on.",
-    switchedEn: "Got it, English from now on.",
+    acks: [
+      (v)=>`Got it. (${BOT_NAME} v${v})`,
+      (v)=>`Understood. (${BOT_NAME} v${v})`,
+      (v)=>`Okay! (${BOT_NAME} v${v})`
+    ],
+    tail: [
+      "How can I help?",
+      "What do you need exactly?",
+      "What can I do for you?"
+    ],
+    dupUser: [
+      "I just answered that.",
+      "Same input detected.",
+      "We just covered that."
+    ],
+    cooldown: [
+      "Already done 👍",
+      "All right, moving on.",
+      "Heard you."
+    ],
+    switchedDe: "Got it, I’ll reply in German.",
+    switchedEn: "Got it, I’ll reply in English.",
+    switchedAuto: "Auto language is active again.",
     bye: "See you!",
     reset: "History cleared."
   }
 };
 
-// --- Kernlogik
-function replyFor(text, session) {
-  const forced = session.lang;
-  const lang = forced || detectLang(text);
+// ---------- Kernlogik ----------
+function chooseLang(session, text) {
+  return session.lang || detectLang(text);
+}
+
+// Anti-Repetition Regeln:
+// - Gleiches User-Input < 10s → dupUser-Variante
+// - Gleicher Intent < 8s → kurze cooldown-Variante statt erneutem großen Text
+// - Nie zweimal exakt denselben Bottext hintereinander
+function replyFor(text, s) {
+  const lang = chooseLang(s, text);
   const L = TXT[lang];
-  const low = norm(text);
+  const n = norm(text);
 
-  if (low === '/start') return L.hello(BOT_NAME);
-  if (low === '/help')  return L.help;
-  if (low === '/sos')   return L.sos;
-  if (low === '/langde'){ session.lang='de'; return TXT.de.switchedDe; }
-  if (low === '/langen'){ session.lang='en'; return TXT.en.switchedEn; }
-  if (low === '/reset'){ session.lastBot=''; session.lastUser=''; return L.reset; }
+  // Befehle / Intents
+  const nowMs = now();
+  const replyIntent = (key, makeTextFn) => {
+    const withinCooldown = (s.lastIntent === key) && (nowMs - s.lastIntentAt < 8000);
+    s.lastIntent = key;
+    s.lastIntentAt = nowMs;
+    if (withinCooldown) return rotate(L.cooldown, s.idx);
+    return makeTextFn();
+  };
 
-  if (low && low === session.lastUser && now() - session.lastUserAt < 10000) {
-    return rotatePick(L.dupUser, session.variantIndex);
+  if (n === '/start') return replyIntent('start', () => L.hello(BOT_NAME));
+  if (n === '/help')  return replyIntent('help',  () => L.help);
+  if (n === '/sos')   return replyIntent('sos',   () => L.sos);
+  if (n === '/langde'){ s.lang='de';  return L.switchedDe; }
+  if (n === '/langen'){ s.lang='en';  return L.switchedEn; }
+  if (n === '/langauto'){ s.lang=null; return L.switchedAuto; }
+  if (n === '/reset'){ s.lastUser=''; s.lastBot=''; s.lastIntent=''; return L.reset; }
+
+  // Duplikateingabe des Users?
+  if (n && n === s.lastUser && nowMs - s.lastUserAt < 10000) {
+    s.lastIntent = 'dup';
+    s.lastIntentAt = nowMs;
+    return rotate(L.dupUser, s.idx);
   }
-  const ack = rotatePick(L.ack, session.variantIndex)(VERSION);
-  const tail = (lang === 'de') ? "Wie kann ich helfen?" : "How can I help?";
+
+  // Kleine Notfall-Stichworte (Hund nicht gut) -> hilfreiche Kurzantwort
+  if (/\bhund\b/i.test(text) && /\b(nicht gut|schlecht|hilfe|arzt|krank|verletz|blut|erbr(ech|icht)|durchfall)\b/i.test(text)) {
+    s.lastIntent = 'pet_sos';
+    s.lastIntentAt = nowMs;
+    return L.sos;
+  }
+
+  // Standard-Antwort (wechselnde Varianten)
+  const ack = rotate(L.acks, s.idx)(VERSION);
+  const tail = rotate(L.tail, s.idx);
+  s.lastIntent = 'ack';
+  s.lastIntentAt = nowMs;
   return `${ack}\n${tail}`;
 }
 
-function postProcessNoRepeat(out, session) {
-  if (norm(out) === norm(session.lastBot)) {
-    const addon = (session.lang === 'en') ? "Anything else?" : "Noch etwas?";
-    return out + "\n" + addon;
+function postProcessNoRepeat(out, s) {
+  const outNorm = norm(out);
+  if (outNorm === s.lastBot) {
+    // hänge eine kleine, sprachspezifische Variation an
+    const extra = (s.lang === 'en') ? "Anything else?" : "Noch etwas?";
+    if (norm(out + "\n" + extra) !== s.lastBot) return out + "\n" + extra;
+    return out + `\n#${Math.floor(Math.random()*1000)}`; // absolute Notbremse
   }
   return out;
 }
 
-// --- Telegram
+// ---------- Telegram ----------
 async function startTelegram() {
   if (!Telegraf) throw new Error('telegraf not installed');
   const bot = new Telegraf(TOKEN);
@@ -157,39 +223,39 @@ async function startTelegram() {
     const out = replyFor(msg, s);
     const final = postProcessNoRepeat(out, s);
 
-    s.lastUser = norm(msg);
+    s.lastUser   = norm(msg);
     s.lastUserAt = now();
-    s.lastBot = final;
+    s.lastBot    = norm(final);
 
     ctx.reply(final).catch(err => console.error('[TELEGRAM send error]', err));
   });
 
   await bot.launch();
-  console.log('[TELEGRAM] bot launched. Waiting for messages.');
+  console.log(`[${BOT_NAME}] Telegram-Bot v${VERSION} läuft. CTRL+C zum Beenden.`);
   process.once('SIGINT', () => { bot.stop('SIGINT'); process.exit(0); });
   process.once('SIGTERM', () => { bot.stop('SIGTERM'); process.exit(0); });
 }
 
-// --- CLI
+// ---------- CLI (Fallback) ----------
 function startCLI() {
   const id = 'cli';
   const s = getSession(id);
   const rl = require('readline').createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: `${BOT_NAME}> `
+    input: process.stdin, output: process.stdout, prompt: `${BOT_NAME}> `
   });
 
-  console.log('[CLI] started.');
-  if (process.stdin.isTTY) rl.prompt();
+  console.log(`${BOT_NAME} v${VERSION} – CLI-Modus. Tippe /help.`);
+  rl.prompt();
 
   rl.on('line', (line) => {
     const msg = line || '';
     const out = replyFor(msg, s);
     const final = postProcessNoRepeat(out, s);
-    s.lastUser = norm(msg);
+
+    s.lastUser   = norm(msg);
     s.lastUserAt = now();
-    s.lastBot = final;
+    s.lastBot    = norm(final);
+
     console.log(final);
     rl.prompt();
   });
@@ -198,59 +264,16 @@ function startCLI() {
     console.log((s.lang === 'en') ? TXT.en.bye : TXT.de.bye);
     process.exit(0);
   });
-
-  // Non‑TTY (z. B. Container ohne Interaktivität) -> sauber beenden
-  if (!process.stdin.isTTY) {
-    process.stdin.on('end', () => {
-      setTimeout(() => process.exit(0), 50);
-    });
-  }
 }
 
-// --- Auto-SMOKE (für Container/CI)
-async function runSmokeAndExit() {
-  const id = 'smoke';
-  const s = getSession(id);
-  const inputs = [
-    '/start',
-    '/help',
-    'Hallo, ich brauche Hilfe',
-    'Hallo, ich brauche Hilfe', // Duplikat -> Anti-Repetition
-    '/langen',
-    'I need help',
-    '/reset'
-  ];
-  console.log('[SMOKE] starting…');
-  for (const line of inputs) {
-    const out = replyFor(line, s);
-    const final = postProcessNoRepeat(out, s);
-    s.lastUser = norm(line);
-    s.lastUserAt = Date.now();
-    s.lastBot = final;
-    console.log(`[IN ] ${line}`);
-    console.log(`[OUT] ${final}`);
-  }
-  console.log('[SMOKE] done.');
-  process.exit(0);
-}
-
-// --- Start
+// ---------- Start ----------
 (async () => {
   try {
-    if (USE_TELEGRAM) {
-      console.log('[START] Telegram mode…');
-      await startTelegram();
-    } else if (RUN_SMOKE || !process.stdin.isTTY) {
-      console.log('[START] SMOKE mode…');
-      await runSmokeAndExit();
-    } else {
-      console.log('[START] CLI mode…');
-      startCLI();
-    }
-  } catch (err) {
-    console.error('[FATAL STARTUP ERROR]', err && err.stack || err);
-    console.log('[RECOVERY] Falling back to SMOKE.');
-    try { await runSmokeAndExit(); } catch (e) { console.error('[SMOKE FAIL]', e); process.exit(1); }
+    if (USE_TELEGRAM) await startTelegram();
+    else              startCLI();
+  } catch (e) {
+    console.error('[FATAL]', e);
+    process.exit(1);
   }
 })();
 

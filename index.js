@@ -1,69 +1,54 @@
-// index.js – Telegram-Bot nur mit lokalen Cases (ohne OpenAI)
-
+// index.js – Seelenpfote Bot (Nur Textmodus, empathisch, ohne OpenAI)
+// Importiere benötigte Module
 import TelegramBot from 'node-telegram-bot-api';
 import cases from './cases.js';
 
-// ========= KONFIG =========
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
-if (!TELEGRAM_TOKEN) {
+// Prüfe Umgebungsvariablen
+if (!process.env.TELEGRAM_TOKEN) {
   console.error('❌ Fehler: TELEGRAM_TOKEN nicht gesetzt.');
   process.exit(1);
 }
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+// Bot starten (Polling-Modus)
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 console.log('🤖 Bot gestartet – nur Textmodus, empathisch');
 
-// ========= Empathie-Wrapper =========
+// Einfache "careWrap"-Funktion für einfühlsame Antworten
 function careWrap(text) {
-  return `💛 ${text}\n\n🐾 Du bist nicht allein – wir sind für dich da.`;
+  const emojis = ['💙', '🐾', '🌿', '💖', '🕊️'];
+  const ending = emojis[Math.floor(Math.random() * emojis.length)];
+  return `Ich bin für dich da. ${text} ${ending}`;
 }
 
-// ========= Sprach-Erkennung =========
-function detectLang(message) {
-  const lang = /[a-z]/i.test(message) && !/[äöüß]/i.test(message) ? 'en' : 'de';
-  return lang;
-}
-
-// ========= Nachricht-Verarbeitung =========
+// Nachricht verarbeiten
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text?.trim();
+  const text = (msg.text || '').trim();
 
   if (!text) {
-    bot.sendMessage(chatId, "❓ Bitte beschreibe dein Anliegen in Worten.");
+    bot.sendMessage(chatId, careWrap('Ich habe dich leider nicht verstanden. Kannst du es bitte nochmal in eigenen Worten beschreiben?'));
     return;
   }
 
-  const lang = detectLang(text);
-  let matchedCase = null;
+  // Sprache grob erkennen
+  const lang = /[a-z]/i.test(text) ? 'en' : 'de';
 
-  for (const c of cases) {
+  // Passenden Case suchen
+  const found = cases.find(c => {
     try {
-      if (c.match(text, lang)) {
-        matchedCase = c;
-        break;
-      }
-    } catch (err) {
-      console.error(`Fehler in Case ${c.id}:`, err);
+      return c.match && c.match(text, lang);
+    } catch {
+      return false;
     }
-  }
+  });
 
-  if (!matchedCase) {
-    bot.sendMessage(chatId, careWrap(
-      lang === 'en'
-        ? "I'm not sure what you mean. Could you describe your pet's situation in a bit more detail? 🐶🐱"
-        : "Ich bin mir nicht ganz sicher, was du meinst. Magst du die Situation deines Tieres etwas genauer beschreiben? 🐶🐱"
-    ));
-    return;
+  if (found) {
+    bot.sendMessage(chatId, careWrap(found.start()));
+  } else {
+    bot.sendMessage(chatId, careWrap('Das klingt wichtig. Erzähl mir bitte ein bisschen genauer, was passiert ist, damit ich dir gezielt helfen kann.'));
   }
-
-  // Antwort senden
-  const response = matchedCase.start(text);
-  bot.sendMessage(chatId, careWrap(response), { parse_mode: 'Markdown' });
 });
 
-// ========= Fehler-Logging =========
-bot.on('polling_error', (err) => console.error('Polling-Fehler:', err.message));
 
 
 

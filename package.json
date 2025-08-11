@@ -1,17 +1,14 @@
 {
   "name": "seelenpfote-bot",
   "version": "1.0.0",
-  "description": "Telegram Bot für Seelenpfote mit externer Fotoanalyse",
   "main": "index.js",
   "type": "commonjs",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.61.0",
+    "dotenv": "^16.0.0"
+  },
   "scripts": {
     "start": "node index.js"
-  },
-  "dependencies": {
-    "axios": "^1.6.7",
-    "dotenv": "^16.4.5",
-    "form-data": "^4.0.0",
-    "node-telegram-bot-api": "^0.61.0"
   }
 }
 

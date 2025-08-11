@@ -1,3 +1,4 @@
+// Telegram-Bot laden
 const TelegramBot = require('node-telegram-bot-api');
 const cases = require('./cases');
 
@@ -8,32 +9,42 @@ if (!token) {
   process.exit(1);
 }
 
-// Bot im Long Polling starten
+// Bot starten
 const bot = new TelegramBot(token, { polling: true });
-
-// Begrüßung nur einmal pro Chat
 const greetedUsers = new Set();
+
+console.log("🤖 Bot gestartet – nur Textmodus, empathisch");
 
 bot.on('message', (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || '').trim();
+  const name = msg.from?.first_name || "Freund";
 
-  // Begrüßung
+  // Persönliche Begrüßung (nur beim ersten Mal im Chat)
   if (!greetedUsers.has(chatId)) {
-    bot.sendMessage(chatId, `💛 Hallo ${msg.from.first_name || 'Freund'}, ich bin für dich da, um deinem Tier zu helfen.  
-Erzähl mir bitte, was los ist – und ich gebe dir sofort Tipps.`);
+    bot.sendMessage(
+      chatId,
+      `💛 Hallo ${name}, ich bin hier, um dir und deinem Tier zu helfen.  
+Schreib mir bitte, was passiert ist – dann schauen wir gemeinsam nach der besten Unterstützung für euch.`
+    );
     greetedUsers.add(chatId);
+    return;
   }
 
-  // Passenden Case suchen
-  const found = cases.find(c => c.match(text));
+  // passenden Fall suchen
+  const found = cases.find(c => c.match(text, 'de') || c.match(text, 'en'));
+  
   if (found) {
     bot.sendMessage(chatId, found.start(), { parse_mode: 'Markdown' });
   } else {
-    bot.sendMessage(chatId, `Ich verstehe dich 💛, aber dazu habe ich gerade keinen festen Ratgeber.  
-Kannst du mir genauer beschreiben, was passiert ist?`);
+    bot.sendMessage(
+      chatId,
+      `Ich höre dir zu 💛 – magst du mir bitte etwas genauer erzählen, was passiert ist?  
+So kann ich dir die besten Erste-Hilfe-Schritte geben.`
+    );
   }
 });
+
 
 
 

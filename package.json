@@ -1,14 +1,17 @@
 {
   "name": "seelenpfote-bot",
   "version": "1.0.0",
-  "description": "Telegram Erste-Hilfe Bot für Tiere – empathisch, nur Textmodus",
+  "description": "Telegram Bot für Seelenpfote – mit Fotoanalyse und empathischen Antworten",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "",
-  "license": "MIT",
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.0"
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.5",
+    "form-data": "^4.0.0",
+    "node-telegram-bot-api": "^0.61.0"
   }
 }
+

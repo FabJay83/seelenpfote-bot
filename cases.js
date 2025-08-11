@@ -183,12 +183,12 @@ Sag mir bitte: **wie oft/12 h**, **Wasser bleibt drin**, **müde/normal**, **B
 
   // 11) Humpeln/Lahmheit
   {
-    id: 'limp',
-    emergency: false,
-    match: (t, lang) => {
-      const s = safeMatch(t), l = safeLang(lang);
-      return l === 'en' ? /(limp|lameness|not weight-bearing|favoring leg)/.test(s)
-                        : /(humpel|lahm|zieht bein|belastet nicht|lahmt)/.test(s);
+     id: 'limp',
+  emergency: false,
+  match: (t, lang) => {
+    const s = safeMatch(t), l = safeLang(lang);
+    return l === 'en' ? /(limp|lameness|not weight-bearing|favoring leg)/.test(s)
+                      : /(humpel|lahm|zieht bein|belastet nicht|lahmt)/.test(s);
     },
     start: () =>
 `🚶 **Humpeln – wir schauen genau hin.**  

@@ -1,7 +1,7 @@
 {
   "name": "seelenpfote-bot",
   "version": "1.0.0",
-  "description": "Telegram Bot für Seelenpfote – mit Fotoanalyse und empathischen Antworten",
+  "description": "Telegram Bot für Seelenpfote mit externer Fotoanalyse",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -14,4 +14,5 @@
     "node-telegram-bot-api": "^0.61.0"
   }
 }
+
 

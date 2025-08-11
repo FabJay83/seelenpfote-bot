@@ -1,18 +1,14 @@
 {
   "name": "seelenpfote-bot",
   "version": "1.0.0",
-  "description": "Telegram-Bot für Seelenpfote – Erste Hilfe für Hund & Katze",
+  "description": "Einfühlsamer Telegram-Tierhilfe-Bot",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "node-telegram-bot-api": "^0.63.0",
-    "openai": "^4.59.1"
-  },
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "license": "MIT"
+    "node-telegram-bot-api": "^0.61.0"
+  }
 }
+

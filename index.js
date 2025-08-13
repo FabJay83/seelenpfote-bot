@@ -1,9 +1,14 @@
 const { Telegraf } = require('telegraf');
 
-// Bot-Token aus Umgebungsvariable (empfohlen für Railway)
+// Prüfen, ob das Bot-Token vorhanden ist
+if (!process.env.BOT_TOKEN) {
+  console.error('Fehler: Die Umgebungsvariable BOT_TOKEN ist nicht gesetzt!');
+  process.exit(1);
+}
+
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// Schlüsselwörter für verschiedene Probleme
+// Schlüsselwörter und Antworten
 const problems = [
   {
     keywords: ['humpelt', 'lahmt', 'bein', 'laufen', 'schmerzen'],
@@ -16,18 +21,13 @@ const problems = [
   {
     keywords: ['durchfall', 'stuhl', 'kot', 'dünn'],
     response: 'Dein Tier hat Verdauungsprobleme. Seit wann besteht der Durchfall? Gibt es Blut oder Schleim im Kot?'
-  },
-  // Weitere Problemgruppen kannst du hier ergänzen
+  }
 ];
 
+// Nachrichtenverarbeitung
 bot.on('text', (ctx) => {
-  const userMessage = ctx.message.text.toLowerCase();
-
-  // Versuchen, das Problem zu erkennen
-  const found = problems.find(problem =>
-    problem.keywords.some(keyword => userMessage.includes(keyword))
-  );
-
+  const msg = ctx.message.text.toLowerCase();
+  const found = problems.find(p => p.keywords.some(word => msg.includes(word)));
   if (found) {
     ctx.reply(found.response);
   } else {
@@ -35,10 +35,15 @@ bot.on('text', (ctx) => {
   }
 });
 
-bot.launch();
-console.log('Bot läuft!');
+// Bot starten
+bot.launch()
+  .then(() => console.log('Bot läuft!'))
+  .catch(err => {
+    console.error('Fehler beim Starten des Bots:', err);
+    process.exit(1);
+  });
 
-// Railway/Heroku: Sauberes Beenden
+// Sauberes Beenden
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 

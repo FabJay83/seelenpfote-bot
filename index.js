@@ -1,62 +1,46 @@
-require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
-const cases = require('./cases.js');
+const { Telegraf } = require('telegraf');
 
-const TELEGRAM_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim();
+// Bot-Token aus Umgebungsvariable (empfohlen für Railway)
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
-if (!TELEGRAM_TOKEN) {
-  console.error('❌ Fehlt: TELEGRAM_BOT_TOKEN (Railway → Variables setzen)');
-  process.exit(1);
-}
+// Schlüsselwörter für verschiedene Probleme
+const problems = [
+  {
+    keywords: ['humpelt', 'lahmt', 'bein', 'laufen', 'schmerzen'],
+    response: 'Es klingt, als hätte dein Tier Probleme mit dem Bewegungsapparat. Seit wann besteht das Problem? Gibt es noch weitere Symptome?'
+  },
+  {
+    keywords: ['erbrechen', 'kotzt', 'übelkeit', 'spuckt'],
+    response: 'Dein Tier scheint Magen-Darm-Probleme zu haben. Wie oft kommt das vor? Frisst und trinkt es normal?'
+  },
+  {
+    keywords: ['durchfall', 'stuhl', 'kot', 'dünn'],
+    response: 'Dein Tier hat Verdauungsprobleme. Seit wann besteht der Durchfall? Gibt es Blut oder Schleim im Kot?'
+  },
+  // Weitere Problemgruppen kannst du hier ergänzen
+];
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+bot.on('text', (ctx) => {
+  const userMessage = ctx.message.text.toLowerCase();
 
-bot.getMe()
-  .then(me => console.log('🤖 Eingeloggt als @' + me.username))
-  .catch(err => {
-    console.error('❌ Telegram-Token ungültig:', err?.message || String(err));
-    process.exit(1);
-  });
-
-// Hilfsfunktion: Passenden Fall finden
-function findCase(text, lang = 'de') {
-  return cases.find(c => typeof c.match === 'function' && c.match(text, lang));
-}
-
-// /start-Handler
-bot.onText(/^\/start\b/i, async (msg) => {
-  const chatId = msg.chat.id;
-  const hello =
-    'Willkommen bei Seelenpfote! 🐾\n' +
-    'Beschreibe kurz das Problem deines Tieres (z.B. "Durchfall", "humpelt", "Wunde", "hechelt stark" ...).\n' +
-    'Ich gebe dir sofort empathische Erste-Hilfe-Schritte.';
-  await bot.sendMessage(chatId, hello);
-});
-
-// Text-Handler
-bot.on('text', async (msg) => {
-  const chatId = msg.chat.id;
-  const text = (msg.text || '').trim();
-  if (/^\/start\b/i.test(text)) return;
-
-  // Sprache erkennen (hier: nur Deutsch/Englisch, Standard: Deutsch)
-  const lang = /[a-zA-Z]/.test(text) && !/[äöüß]/i.test(text) ? 'en' : 'de';
-
-  const found = findCase(text, lang);
+  // Versuchen, das Problem zu erkennen
+  const found = problems.find(problem =>
+    problem.keywords.some(keyword => userMessage.includes(keyword))
+  );
 
   if (found) {
-    await bot.sendMessage(chatId, found.start(), { parse_mode: 'Markdown' });
+    ctx.reply(found.response);
   } else {
-    await bot.sendMessage(chatId,
-      'Ich konnte das Problem nicht eindeutig zuordnen. Bitte beschreibe kurz:\n' +
-      '• Was ist passiert? (z.B. "humpelt", "Durchfall", "Wunde", ...)\n' +
-      '• Seit wann?\n' +
-      '• Welche Auffälligkeiten siehst du?'
-    );
+    ctx.reply('Kannst du das Problem bitte noch etwas genauer beschreiben? Zum Beispiel: "Mein Hund humpelt seit 1 Woche."');
   }
 });
 
-console.log('✅ Seelenpfote-Bot läuft…');
+bot.launch();
+console.log('Bot läuft!');
+
+// Railway/Heroku: Sauberes Beenden
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
 
 

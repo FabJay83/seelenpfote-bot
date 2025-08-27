@@ -1,5 +1,5 @@
 {
-  "name": "telegram-openai-bot",
+  "name": "telegraf-openai-bot",
   "version": "1.0.0",
   "main": "index.js",
   "type": "commonjs",
@@ -10,8 +10,9 @@
     "node": ">=18.17"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.0",
-    "openai": "^4.57.0"
+    "openai": "^4.57.0",
+    "telegraf": "^4.16.3"
   }
 }
+
 

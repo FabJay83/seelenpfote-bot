@@ -1,83 +1,114 @@
-// Seelenpfote: Telegraf + OpenAI mit Webhook (Railway-ready, Fallback Polling)
+// ----- Grundsetup -----
+const { Telegraf } = require('telegraf');
 
-const { Telegraf } = require("telegraf");
-const OpenAI = require("openai");
-const http = require("http");
-const express = require("express");
-
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const PUBLIC_URL = process.env.PUBLIC_URL;         // z.B. https://deinprojekt.up.railway.app
-const PORT = process.env.PORT || 3000;
-
-if (!BOT_TOKEN) { console.error("Fehler: BOT_TOKEN fehlt"); process.exit(1); }
-if (!OPENAI_API_KEY) { console.error("Fehler: OPENAI_API_KEY fehlt"); process.exit(1); }
+const BOT_TOKEN = process.env.BOT_TOKEN || 'HIER_DEIN_TELEGRAM_BOT_TOKEN';
+if (!BOT_TOKEN) {
+  console.error('Fehlender BOT_TOKEN. Bitte als Umgebungsvariable setzen.');
+  process.exit(1);
+}
 
 const bot = new Telegraf(BOT_TOKEN);
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// === dein Chat-Handler (gekürzt; nimm hier deinen empathischen Code) ===
-bot.on("text", async (ctx) => {
-  const userMessage = (ctx.message?.text || "").trim();
-  if (!userMessage) return;
+// einfache In-Memory "Datenbank"
+const users = new Map(); // key: userId -> { name: 'Jakob', pets: [{name:'Jaxx', type:'Hund'}] }
 
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "Du bist Seelenpfote, empathisch & fürsorglich..." },
-        { role: "user", content: userMessage }
-      ],
-      temperature: 0.7,
-      max_tokens: 600
-    });
-    const reply = completion.choices?.[0]?.message?.content?.trim() || "Ich bin gerade sprachlos 🐾";
-    await ctx.reply(reply, { parse_mode: "Markdown" });
-  } catch (e) {
-    console.error("OpenAI Fehler:", e?.response?.data || e);
-    await ctx.reply("Ups, da ist etwas schiefgelaufen. Bitte nochmal versuchen.");
-  }
+// ----- Hilfsfunktionen -----
+function getUser(ctx) {
+  const id = ctx.from.id;
+  if (!users.has(id)) users.set(id, { name: null, pets: [] });
+  return users.get(id);
+}
+
+function fmtProfile(data) {
+  const name = data.name ? `• Dein Name: ${data.name}` : '• Deinen Namen kenne ich noch nicht';
+  const pets = data.pets.length
+    ? data.pets.map(p => `   – ${p.name} (${p.type})`).join('\n')
+    : '• Noch keine Tiere gespeichert';
+  return `${name}\n• Deine Tiere:\n${pets}`;
+}
+
+// ----- Texte -----
+const START_TEXT =
+`🌸 *Willkommen bei Seelenpfote* 🐾
+Schön, dass du da bist! Ich bin dein einfühlsamer Tier-Begleiter und möchte dir helfen, gut für deine Fellnase(n) zu sorgen. 💛
+
+So kannst du starten:
+✨ Sag mir deinen Namen → \`/meinname Max\`
+✨ Erzähl mir von deinem Tier → \`/tier Jaxx Hund\`
+✨ Schau dein Profil an → \`/profil\`
+✨ Alles zurücksetzen → \`/zurücksetzen\`
+
+Ich freue mich, euch kennenzulernen! 💕`;
+
+const HELP_TEXT =
+`ℹ️ *Kurze Hilfe*
+• Namen setzen: \`/meinname Max\`
+• Tier speichern: \`/tier Name Art\`  z. B. \`/tier Jaxx Hund\`
+• Profil anzeigen: \`/profil\`
+• Zurücksetzen: \`/zurücksetzen\``;
+
+// ----- Kommandos -----
+// /start
+bot.start(async (ctx) => {
+  await ctx.replyWithMarkdownV2(START_TEXT);
 });
 
-// === Start-Logik: Webhook bevorzugt, sonst Polling ===
-(async () => {
-  try {
-    if (PUBLIC_URL) {
-      // Eindeutiger Pfad (verhindert Kollisionen)
-      const path = `/telegram/${BOT_TOKEN.slice(-12)}`;
-
-      // Zuerst sicherstellen: alter Webhook weg, dann neuen setzen
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-      await bot.telegram.setWebhook(`${PUBLIC_URL}${path}`);
-
-      const app = express();
-      app.use(express.json());
-      app.use(bot.webhookCallback(path));
-
-      // Healthcheck
-      app.get("/", (_req, res) => res.status(200).send("OK"));
-
-      const server = http.createServer(app);
-      server.listen(PORT, () => {
-        console.log(`✅ Webhook aktiv: ${PUBLIC_URL}${path} (Port ${PORT})`);
-      });
-    } else {
-      // Fallback: Polling (nur 1 Instanz!)
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-      await bot.launch();
-      console.log("✅ Polling aktiv (kein PUBLIC_URL gesetzt).");
-    }
-  } catch (err) {
-    console.error("Startfehler:", err);
-    process.exit(1);
+// /meinname <Name>   (Alias: /myname)
+bot.command(['meinname', 'myname'], (ctx) => {
+  const parts = ctx.message.text.trim().split(/\s+/).slice(1);
+  if (parts.length === 0) {
+    return ctx.reply('Wie darf ich dich nennen? Schreib z. B. „/meinname Max“.');
   }
-})();
+  const data = getUser(ctx);
+  data.name = parts.join(' ');
+  ctx.reply(`Danke dir, ${data.name}! 😊`);
+});
 
-// Clean shutdown
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
-process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));
-process.on("uncaughtException", (e) => console.error("uncaughtException:", e));
+// /tier <Name> <Art>   (Alias: /addpet)
+bot.command(['tier', 'addpet'], (ctx) => {
+  const args = ctx.message.text.trim().split(/\s+/).slice(1);
+  if (args.length < 2) {
+    return ctx.reply('Erzähl mir kurz Name und Art deines Tieres, z. B. „/tier Jaxx Hund“.');
+  }
+  const name = args.slice(0, -1).join(' ');
+  const type = args[args.length - 1];
+  const data = getUser(ctx);
+  data.pets.push({ name, type });
+  ctx.reply(`Wunderbar! Ich habe *${name}* als ${type} gespeichert 🐾`, { parse_mode: 'Markdown' });
+});
+
+// /profil   (Alias: /profile)
+bot.command(['profil', 'profile'], (ctx) => {
+  const data = getUser(ctx);
+  ctx.reply(`📒 *Dein Profil*\n${fmtProfile(data)}`, { parse_mode: 'Markdown' });
+});
+
+// /zurücksetzen   (Alias: /reset)
+bot.command(['zurücksetzen', 'zuruecksetzen', 'reset'], (ctx) => {
+  users.set(ctx.from.id, { name: null, pets: [] });
+  ctx.reply('Alles zurückgesetzt. Wir fangen ganz gemütlich von vorne an 🤝');
+});
+
+// /hilfe   (Alias: /help)
+bot.command(['hilfe', 'help'], (ctx) => ctx.replyWithMarkdown(HELP_TEXT));
+
+// Fallback: freundliche Hilfe
+bot.on('text', (ctx) => {
+  return ctx.reply('Wenn du magst, schreib „/hilfe“ für eine kurze Übersicht der Möglichkeiten 💡');
+});
+
+// ----- Start (Long Polling) -----
+bot.launch()
+  .then(() => console.log('Seelenpfote läuft (Polling) 🐶'))
+  .catch(err => {
+    console.error('Startfehler:', err);
+    process.exit(1);
+  });
+
+// Sanft beenden (Railway/Heroku)
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 
 
 

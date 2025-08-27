@@ -1,5 +1,6 @@
-// Seelenpfote – kompletter Bot: 100% OpenAI-gestützt (Text + Bilder) mit empathischem Emoji-Stil
-// CommonJS, Telegraf + OpenAI (Vision). Long Polling (Webhook deaktiviert).
+// Seelenpfote – Hunde & Katzen only 🐶🐱
+// 100% OpenAI-gestützt (Text + Bilder, Vision), empathischer Stil mit passenden Emojis.
+// CommonJS, Telegraf + OpenAI. Long Polling (Webhook wird deaktiviert).
 
 const { Telegraf } = require('telegraf');
 const OpenAI = require('openai');
@@ -19,7 +20,7 @@ if (!OPENAI_API_KEY) {
 const bot = new Telegraf(BOT_TOKEN);
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// ===== Gesprächsspeicher pro Nutzer =====
+// ========= Gesprächsspeicher pro Nutzer =========
 // Struktur: Map<userId, OpenAIMessage[]>
 const sessions = new Map();
 
@@ -29,59 +30,63 @@ function getSession(userId) {
       {
         role: 'system',
         content:
-          "Du bist 'Seelenpfote', ein einfühlsamer Tier-Begleiter. Sprich warm, beruhigend und menschlich. " +
-          "Benutze passende Emojis, um Gefühle sanft zu unterstreichen (z. B. ❤️ Mitgefühl, 🐾 Tiere, 😊 Ermutigung, ⚠️ Warnhinweis, 📸 für Fotos). " +
-          "Halte Antworten klar und natürlich, ohne unnötigen Fachjargon. " +
-          "Gib bei Bedarf einfache, sichere Erste-Hilfe-Hinweise für Zuhause (niedrigschwellig). " +
-          "Zeige bei ernsthaften Anzeichen respektvoll auf, dass eine tierärztliche Abklärung sinnvoll ist, ohne Angst zu machen. " +
-          "Passe die Sprache an die Nutzerin/den Nutzer an (antworte in der Sprache der letzten Nachricht). " +
-          "Wenn Name oder Tiername genannt wurden, sprich die Person bzw. die Fellnase gelegentlich persönlich an – dezent, nicht in jedem Satz. " +
-          "Vermeide Wiederholungen – bestätige einmal, dann werde natürlich."
+          "Du bist 'Seelenpfote', ein einfühlsamer Begleiter ausschließlich für Hunde 🐶 und Katzen 🐱. " +
+          "Beantworte nur Fragen zu Hunden oder Katzen. Wenn es um andere Tiere geht, erkläre freundlich, " +
+          "dass du dafür leider nicht zuständig bist und fokussiere auf Hund/Katze. " +
+          "Sprich warm, beruhigend und menschlich. Benutze passende Emojis (❤️ Mitgefühl, 🐾 Tierbezug, 😊 Ermutigung, ⚠️ Warnhinweis, 📸 Foto), " +
+          "ohne zu übertreiben. Halte Antworten klar und natürlich – vermeide unnötigen Fachjargon. " +
+          "Gib bei Bedarf einfache, sichere Erste-Hilfe-Hinweise für Zuhause. Weisen ernsthafte Anzeichen darauf hin, " +
+          "dass eine tierärztliche Abklärung sinnvoll ist, formuliere respektvoll und ohne Angst zu machen. " +
+          "Passe die Sprache an die der Nutzerin/des Nutzers an. Wenn Name oder Tiername genannt werden, " +
+          "kannst du sie gelegentlich persönlich ansprechen – dezent, nicht in jedem Satz. Vermeide Wiederholungen."
       }
     ]);
   }
   return sessions.get(userId);
 }
 
-async function askOpenAI(userId, userContent) {
+async function askOpenAI(userId, userContent, temperature = 0.5) {
   const history = getSession(userId);
   history.push({ role: 'user', content: userContent });
 
   const resp = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',          // Vision-fähig, günstig & schnell
-    temperature: 0.5,
+    model: 'gpt-4o-mini',  // Vision-fähig, schnell & kosteneffizient
+    temperature,
     messages: history
   });
 
-  const answer = resp.choices?.[0]?.message?.content?.trim() || 'Entschuldige, mir fehlen gerade Informationen. Magst du es kurz erneut versuchen?';
+  const answer = resp.choices?.[0]?.message?.content?.trim()
+    || 'Entschuldige, mir fehlen gerade Details. Magst du es kurz ergänzen?';
   history.push({ role: 'assistant', content: answer });
   return answer;
 }
 
-// ===== Fehler-Logging =====
+// ========= Fehler-Logging =========
 bot.catch((err, ctx) => {
   console.error('Bot-Fehler bei Update', ctx.update?.update_id, err);
 });
 
-// ===== Start (Begrüßung über OpenAI generieren) =====
+// ========= Start: Begrüßung aus OpenAI =========
 bot.start(async (ctx) => {
   try {
     const userId = ctx.from.id;
-    const intro = "Der Nutzer hat den Chat gestartet. Bitte begrüße warm, kurz und freundlich. Lade ein, etwas über die Fellnase zu erzählen oder ein Foto zu senden. Verwende passende Emojis, aber nicht übertrieben.";
-    const answer = await askOpenAI(userId, intro);
+    const intro =
+      "Der Nutzer hat den Chat gestartet. Begrüße warm, sanft und kurz. " +
+      "Lade ein, etwas über seinen Hund oder seine Katze zu erzählen oder ein Foto zu senden. " +
+      "Nutze passende Emojis, aber nicht zu viele.";
+    const answer = await askOpenAI(userId, intro, 0.4);
     await ctx.reply(answer);
   } catch (e) {
     console.error(e);
-    await ctx.reply('Willkommen bei Seelenpfote 🐾 – ich bin gleich für dich da.');
+    await ctx.reply('Willkommen bei Seelenpfote 🐾 – erzähl mir gern von deinem Hund oder deiner Katze.');
   }
 });
 
-// ===== Textnachrichten =====
+// ========= Textnachrichten =========
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const text = (ctx.message.text || '').trim();
 
-  // An OpenAI geben – komplette Unterhaltung im Kontext
   try {
     const answer = await askOpenAI(userId, text);
     await ctx.reply(answer);
@@ -91,7 +96,7 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// ===== Fotos (Vision) =====
+// ========= Fotos (Vision) =========
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
   try {
@@ -104,7 +109,10 @@ bot.on('photo', async (ctx) => {
     history.push({
       role: 'user',
       content: [
-        { type: 'text', text: "Hier ist ein Foto meiner Fellnase. Bitte beurteile empathisch, was du siehst (z. B. Wunde, Rötung, Schwellung) und gib mir liebevolle, klare Hinweise. Nutze passende Emojis." },
+        { type: 'text', text:
+          "Hier ist ein Foto. Beurteile empathisch und nur im Kontext von Hund oder Katze, " +
+          "was zu sehen sein könnte (z. B. Rötung, Schwellung, Wunde, Haut/Zehen/Ohren/Augen). " +
+          "Gib sanfte, sichere Hinweise für zuhause und formuliere ruhig. Nutze passende Emojis." },
         { type: 'image_url', image_url: { url: fileUrl } }
       ]
     });
@@ -115,16 +123,17 @@ bot.on('photo', async (ctx) => {
       messages: history
     });
 
-    const answer = resp.choices?.[0]?.message?.content?.trim() || 'Ich konnte das Bild gerade nicht sinnvoll beurteilen. Magst du kurz beschreiben, was dir Sorgen macht?';
+    const answer = resp.choices?.[0]?.message?.content?.trim()
+      || 'Ich konnte das Foto gerade nicht sinnvoll beurteilen. Magst du kurz beschreiben, was dir Sorgen macht?';
     history.push({ role: 'assistant', content: answer });
     await ctx.reply(answer);
   } catch (e) {
     console.error(e);
-    await ctx.reply('Das Bild konnte ich gerade nicht auswerten. Magst du es nochmal senden oder kurz beschreiben, was du siehst? 📸');
+    await ctx.reply('Das Foto konnte ich nicht auswerten. Magst du es nochmal senden oder kurz beschreiben, was los ist? 📸');
   }
 });
 
-// ===== Dokumente (z. B. Bild als Datei) =====
+// ========= Dokumente (z. B. Bild als Datei) =========
 bot.on('document', async (ctx) => {
   const userId = ctx.from.id;
   try {
@@ -136,7 +145,9 @@ bot.on('document', async (ctx) => {
     history.push({
       role: 'user',
       content: [
-        { type: 'text', text: "Hier ist eine Datei (vermutlich ein Bild). Bitte beurteile empathisch, was du siehst, und gib klare, sanfte Hinweise. Nutze passende Emojis." },
+        { type: 'text', text:
+          "Hier ist eine Datei (vermutlich ein Bild). Beurteile empathisch und ausschließlich für Hund/Katze, " +
+          "was sichtbar sein könnte und gib ruhige, klare Hinweise. Nutze passende Emojis." },
         { type: 'image_url', image_url: { url: fileUrl } }
       ]
     });
@@ -147,21 +158,22 @@ bot.on('document', async (ctx) => {
       messages: history
     });
 
-    const answer = resp.choices?.[0]?.message?.content?.trim() || 'Ich konnte die Datei nicht sinnvoll beurteilen. Magst du kurz beschreiben, was dir Sorgen macht?';
+    const answer = resp.choices?.[0]?.message?.content?.trim()
+      || 'Ich konnte die Datei nicht sinnvoll beurteilen. Magst du kurz beschreiben, was dir Sorgen macht?';
     history.push({ role: 'assistant', content: answer });
     await ctx.reply(answer);
   } catch (e) {
     console.error(e);
-    await ctx.reply('Die Datei konnte ich nicht auswerten. Magst du es mit einem Foto versuchen oder kurz beschreiben, was los ist? 📎');
+    await ctx.reply('Die Datei konnte ich nicht auswerten. Magst du es mit einem Foto versuchen oder beschreiben, was los ist? 📎');
   }
 });
 
-// ===== Starten (Webhook aus -> Polling) =====
+// ========= Starten (Webhook aus → Long Polling) =========
 (async () => {
   try {
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     await bot.launch({ dropPendingUpdates: true });
-    console.log('Seelenpfote läuft (100% OpenAI, Vision, Polling) 🐶🐾');
+    console.log('Seelenpfote läuft (Dogs & Cats only, Vision, Polling) 🐶🐱🐾');
   } catch (e) {
     console.error('Startfehler:', e);
     process.exit(1);
@@ -170,6 +182,7 @@ bot.on('document', async (ctx) => {
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 
 
 

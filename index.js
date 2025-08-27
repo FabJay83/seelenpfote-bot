@@ -1,4 +1,4 @@
-// Seelenpfote – natürliche Dialoge, keine Slash-Commands
+// Seelenpfote – einfühlsamer Tier-Begleiter (natürliche Sprache, keine Slash-Commands)
 const { Telegraf } = require('telegraf');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || 'HIER_DEIN_TELEGRAM_BOT_TOKEN';
@@ -9,7 +9,7 @@ if (!BOT_TOKEN || BOT_TOKEN === 'HIER_DEIN_TELEGRAM_BOT_TOKEN') {
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// ===== Mini-"Datenbank" im Arbeitsspeicher =====
+// ===== einfache Datenspeicherung im Arbeitsspeicher =====
 const users = new Map(); // userId -> { name: string|null, pets: [{name,type}] }
 function getUser(ctx) {
   const id = ctx.from.id;
@@ -24,23 +24,15 @@ function fmtProfile(d) {
   return `${name}\n${pets}`;
 }
 
-// ===== Texte (Plain Text) =====
+// ===== sensible, warme Texte =====
 const START_TEXT =
-'🌸 Willkommen bei Seelenpfote 🐾\n' +
-'Schön, dass du da bist! Ich bin dein einfühlsamer Tier-Begleiter. Sprich einfach ganz normal mit mir:\n\n' +
-'• „Ich heiße Max.“  → ich merke mir deinen Namen\n' +
-'• „Mein Hund heißt Jaxx.“ / „Ich habe eine Katze namens Luna.“ → ich speichere dein Tier\n' +
-'• „Zeig mir mein Profil.“  → ich fasse alles für dich zusammen\n' +
-'• „Alles löschen“ / „Zurücksetzen“  → ich lösche die gespeicherten Daten\n\n' +
-'Wenn du unsicher bist: „Was kann ich sagen?“ 😊';
+'🌷 Willkommen bei *Seelenpfote* 🐾\n' +
+'Schön, dass du da bist. Ich bin für dich da – ruhig, freundlich und ohne Hektik.\n\n' +
+'Erzähl mir gern ein bisschen von dir und deiner Fellnase. Wenn du magst, kannst du mir auch ein Foto schicken. ' +
+'Ich höre dir zu und helfe dir, die Situation besser einzuordnen. 💛';
 
-const HELP_TEXT =
-'Ich verstehe u. a.:\n' +
-'• „Ich heiße … / Mein Name ist …”\n' +
-'• „Mein Hund/Meine Katze heißt …” / „Ich habe einen … namens …”\n' +
-'• „Zeig mir mein Profil / Was weißt du über mich?”\n' +
-'• „Alles löschen / Zurücksetzen”\n' +
-'Ich bin für dich da 💛';
+const SOFT_NAME_PROMPT = 'Wie darf ich dich ansprechen? 💬';
+const SOFT_PET_PROMPT  = 'Magst du mir den Namen und die Art deiner Fellnase verraten? (z. B. Jaxx, Hund) 🐶';
 
 // ===== Intent-Erkennung (DE, einfache Regeln) =====
 const ANIMALS = [
@@ -63,9 +55,8 @@ const petPatterns = [
   new RegExp(`\\bmein(?:e)?\\s+(${ANIMALS.join('|')})\\s+([a-zäöüß\\- ]{2,})\\b`, 'i')
 ];
 
+// zarte Profil-Nachfrage
 const profileRegex = /\b(zeig(?:e)?\s+mir\s+(?:mein\s+)?profil|was\s+weißt\s+du\s+über\s+mich|was\s+weißt\s+du\s+von\s+mir)\b/i;
-const resetRegex   = /\b(alles\s+l(ö|oe)schen|zur(ü|ue)cksetzen|setz\s+zur(ü|ue)ck|vergiss\s+alles)\b/i;
-const helpRegex    = /\b(hilfe|was\s+kann\s+ich\s+sagen|was\s+kann\s+ich\s+tun)\b/i;
 
 // ===== Fehler-Handler =====
 bot.catch((err, ctx) => {
@@ -73,27 +64,36 @@ bot.catch((err, ctx) => {
 });
 
 // ===== Begrüßung =====
-bot.start((ctx) => ctx.reply(START_TEXT));
+bot.start(async (ctx) => {
+  await ctx.replyWithMarkdown(START_TEXT);
+  const d = getUser(ctx);
+  if (!d.name) {
+    setTimeout(() => ctx.reply(SOFT_NAME_PROMPT), 300);
+  }
+});
+
+// ===== Fotos: behutsam reagieren =====
+bot.on(['photo', 'document'], async (ctx) => {
+  const d = getUser(ctx);
+  if (!d.name) {
+    await ctx.reply('Danke für das Bild. Bevor wir schauen, wie es deinem Schatz geht: Wie darf ich dich ansprechen? 💬');
+    return;
+  }
+  if (!d.pets.length) {
+    await ctx.reply(`Danke dir, ${d.name}. Magst du mir noch Name und Art deiner Fellnase sagen? Dann kann ich besser auf das Foto eingehen. 🐾`);
+    return;
+  }
+  await ctx.reply('Danke für das Foto. Magst du mir kurz beschreiben, was dir gerade Sorgen macht? Ich höre zu. 🫶');
+});
 
 // ===== Hauptlogik: natürliche Sprache =====
-bot.on('text', (ctx) => {
+bot.on('text', async (ctx) => {
   const text = (ctx.message.text || '').trim();
-
-  // Zurücksetzen?
-  if (resetRegex.test(text)) {
-    users.set(ctx.from.id, { name: null, pets: [] });
-    return ctx.reply('Alles klar – ich habe deine Daten gelöscht. Wir starten ganz in Ruhe neu 🤝');
-  }
-
-  // Hilfe?
-  if (helpRegex.test(text)) {
-    return ctx.reply(HELP_TEXT);
-  }
+  const d = getUser(ctx);
 
   // Profil?
   if (profileRegex.test(text)) {
-    const d = getUser(ctx);
-    return ctx.reply('📒 Dein Profil\n' + fmtProfile(d));
+    return ctx.reply('📒 Kleiner Überblick\n' + fmtProfile(d));
   }
 
   // Name erkennen
@@ -101,8 +101,10 @@ bot.on('text', (ctx) => {
     const m = text.match(re);
     if (m && m[1]) {
       const name = m[1].trim().replace(/\s+/g,' ').replace(/^[a-z]/, c => c.toUpperCase());
-      const d = getUser(ctx); d.name = name;
-      return ctx.reply(`Schön, dich kennenzulernen, ${name}! 😊 Ich habe mir deinen Namen gemerkt.`);
+      d.name = name;
+      await ctx.reply(`Danke dir, ${name}. Schön, dass du hier bist. 🤝`);
+      if (!d.pets.length) setTimeout(() => ctx.reply(SOFT_PET_PROMPT), 300);
+      return;
     }
   }
 
@@ -112,20 +114,22 @@ bot.on('text', (ctx) => {
     if (m && m[1] && m[2]) {
       const type = m[1].toLowerCase();
       const petName = m[2].trim().replace(/\s+/g,' ').replace(/^[a-z]/, c => c.toUpperCase());
-      const d = getUser(ctx); d.pets.push({ name: petName, type });
-      return ctx.reply(`Wunderbar! Ich habe ${petName} als ${type} gespeichert 🐾`);
+      d.pets.push({ name: petName, type });
+      await ctx.reply(`Wie schön – ${petName} (${type}). Ich habe mir das notiert. 🐾`);
+      return;
     }
   }
 
-  // Sanfter Fallback je nach Status
-  const d = getUser(ctx);
+  // Sanfte Führung – ohne Technik & ohne Befehle
   if (!d.name) {
-    return ctx.reply('Magst du mir deinen Namen verraten? Zum Beispiel: „Ich heiße Alex.“ 💬');
+    return ctx.reply('Magst du mir deinen Vornamen sagen? Dann kann ich dich persönlich ansprechen. 🌼');
   }
   if (!d.pets.length) {
-    return ctx.reply('Erzähl mir gern von deinem Tier, z. B.: „Mein Hund heißt Jaxx.“ 🐶');
+    return ctx.reply(`Und wie heißt deine Fellnase, ${d.name}? Welche Art ist sie? 🐶🐱`);
   }
-  return ctx.reply('Wenn du möchtest, schreib: „Zeig mir mein Profil“. Oder erzähl mir mehr über deine Fellnase 💛');
+
+  // Wenn alles bekannt ist: empathische offene Frage
+  return ctx.reply(`Ich bin ganz Ohr, ${d.name}. Was beschäftigt dich gerade bei ${d.pets[0].name}? 🫶`);
 });
 
 // ===== Start (Webhook aus, nur Polling – verhindert 409) =====
@@ -143,3 +147,4 @@ bot.on('text', (ctx) => {
 // Sauber beenden (Railway/Heroku)
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+

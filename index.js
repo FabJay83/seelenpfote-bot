@@ -1,4 +1,4 @@
-// ----- Grundsetup -----
+// ----- Setup -----
 const { Telegraf } = require('telegraf');
 
 const BOT_TOKEN = process.env.BOT_TOKEN || 'HIER_DEIN_TELEGRAM_BOT_TOKEN';
@@ -9,10 +9,9 @@ if (!BOT_TOKEN) {
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// einfache In-Memory "Datenbank"
-const users = new Map(); // key: userId -> { name: 'Jakob', pets: [{name:'Jaxx', type:'Hund'}] }
+// einfache In-Memory-Daten
+const users = new Map(); // userId -> { name: string|null, pets: [{name,type}] }
 
-// ----- Hilfsfunktionen -----
 function getUser(ctx) {
   const id = ctx.from.id;
   if (!users.has(id)) users.set(id, { name: null, pets: [] });
@@ -27,114 +26,88 @@ function fmtProfile(data) {
   return `${name}\n• Deine Tiere:\n${pets}`;
 }
 
-// ----- Texte -----
+// ---- Texte (ohne MarkdownV2) ----
 const START_TEXT =
-`🌸 *Willkommen bei Seelenpfote* 🐾
-Schön, dass du da bist! Ich bin dein einfühlsamer Tier-Begleiter und möchte dir helfen, gut für deine Fellnase(n) zu sorgen. 💛
+`🌸 Willkommen bei Seelenpfote 🐾
+Schön, dass du da bist! Ich bin dein einfühlsamer Tier-Begleiter und helfe dir, gut für deine Fellnase(n) zu sorgen. 💛
 
 So kannst du starten:
-✨ Sag mir deinen Namen → \`/meinname Max\`
-✨ Erzähl mir von deinem Tier → \`/tier Jaxx Hund\`
-✨ Schau dein Profil an → \`/profil\`
-✨ Alles zurücksetzen → \`/zurücksetzen\`
+✨ Sag mir deinen Namen → /meinname Max
+✨ Erzähl mir von deinem Tier → /tier Jaxx Hund
+✨ Schau dein Profil an → /profil
+✨ Alles zurücksetzen → /zurücksetzen
 
 Ich freue mich, euch kennenzulernen! 💕`;
 
 const HELP_TEXT =
-`ℹ️ *Kurze Hilfe*
-• Namen setzen: \`/meinname Max\`
-• Tier speichern: \`/tier Name Art\`  z. B. \`/tier Jaxx Hund\`
-• Profil anzeigen: \`/profil\`
-• Zurücksetzen: \`/zurücksetzen\``;
+`ℹ️ Kurze Hilfe
+• Namen setzen: /meinname Max
+• Tier speichern: /tier Name Art   z. B. /tier Jaxx Hund
+• Profil anzeigen: /profil
+• Zurücksetzen: /zurücksetzen`;
 
-// ----- Kommandos -----
-// /start
-bot.start(async (ctx) => {
-  await ctx.replyWithMarkdownV2(START_TEXT);
+// ---- Fehler-Handler ----
+bot.catch((err, ctx) => {
+  console.error('Bot-Fehler bei Update', ctx.update?.update_id, err);
 });
 
-// /meinname <Name>   (Alias: /myname)
+// ---- Commands ----
+bot.start(async (ctx) => {
+  await ctx.reply(START_TEXT);
+});
+
+// /meinname <Name>  (Alias: /myname)
 bot.command(['meinname', 'myname'], (ctx) => {
   const parts = ctx.message.text.trim().split(/\s+/).slice(1);
-  if (parts.length === 0) {
-    return ctx.reply('Wie darf ich dich nennen? Schreib z. B. „/meinname Max“.');
-  }
+  if (parts.length === 0) return ctx.reply('Wie darf ich dich nennen? Schreib z. B. „/meinname Max“.');
   const data = getUser(ctx);
   data.name = parts.join(' ');
   ctx.reply(`Danke dir, ${data.name}! 😊`);
 });
 
-// /tier <Name> <Art>   (Alias: /addpet)
+// /tier <Name> <Art>  (Alias: /addpet)
 bot.command(['tier', 'addpet'], (ctx) => {
   const args = ctx.message.text.trim().split(/\s+/).slice(1);
-  if (args.length < 2) {
-    return ctx.reply('Erzähl mir kurz Name und Art deines Tieres, z. B. „/tier Jaxx Hund“.');
-  }
+  if (args.length < 2) return ctx.reply('Erzähl mir Name und Art deines Tieres, z. B. „/tier Jaxx Hund“.');
   const name = args.slice(0, -1).join(' ');
   const type = args[args.length - 1];
   const data = getUser(ctx);
   data.pets.push({ name, type });
-  ctx.reply(`Wunderbar! Ich habe *${name}* als ${type} gespeichert 🐾`, { parse_mode: 'Markdown' });
+  ctx.reply(`Wunderbar! Ich habe ${name} als ${type} gespeichert 🐾`);
 });
 
-// /profil   (Alias: /profile)
+// /profil  (Alias: /profile)
 bot.command(['profil', 'profile'], (ctx) => {
   const data = getUser(ctx);
-  ctx.reply(`📒 *Dein Profil*\n${fmtProfile(data)}`, { parse_mode: 'Markdown' });
+  ctx.reply(`📒 Dein Profil\n${fmtProfile(data)}`);
 });
 
-// /zurücksetzen   (Alias: /reset)
+// /zurücksetzen  (Aliase: /zuruecksetzen, /reset)
 bot.command(['zurücksetzen', 'zuruecksetzen', 'reset'], (ctx) => {
   users.set(ctx.from.id, { name: null, pets: [] });
   ctx.reply('Alles zurückgesetzt. Wir fangen ganz gemütlich von vorne an 🤝');
 });
 
-// /hilfe   (Alias: /help)
-bot.command(['hilfe', 'help'], (ctx) => ctx.replyWithMarkdown(HELP_TEXT));
+// /hilfe  (Alias: /help)
+bot.command(['hilfe', 'help'], (ctx) => ctx.reply(HELP_TEXT));
 
-// Fallback: freundliche Hilfe
-bot.on('text', (ctx) => {
-  return ctx.reply('Wenn du magst, schreib „/hilfe“ für eine kurze Übersicht der Möglichkeiten 💡');
-});
+// Fallback
+bot.on('text', (ctx) => ctx.reply('Schreib „/hilfe“ für eine kurze Übersicht der Möglichkeiten 💡'));
 
-// ----- Start (Long Polling) -----
-bot.launch()
-  .then(() => console.log('Seelenpfote läuft (Polling) 🐶'))
-  .catch(err => {
+// ---- Start (Polling, konfliktfrei) ----
+(async () => {
+  try {
+    // Stelle sicher, dass KEIN Webhook aktiv ist (wichtig für Polling)
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true });
+    // Polling exklusiv starten
+    await bot.launch({ dropPendingUpdates: true });
+    console.log('Seelenpfote läuft (Polling, ohne Webhook) 🐶');
+  } catch (err) {
     console.error('Startfehler:', err);
     process.exit(1);
-  });
+  }
+})();
 
-// Sanft beenden (Railway/Heroku)
+// Sanft beenden
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

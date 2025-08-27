@@ -1,43 +1,45 @@
+require('dotenv').config();
 const { Telegraf } = require('telegraf');
+const { OpenAI } = require('openai');
 
-// Prüfen, ob das Bot-Token vorhanden ist
-if (!process.env.BOT_TOKEN) {
-  console.error('Fehler: Die Umgebungsvariable BOT_TOKEN ist nicht gesetzt!');
+// Prüfen, ob die notwendigen Umgebungsvariablen gesetzt sind
+if (!process.env.BOT_TOKEN || !process.env.OPENAI_API_KEY) {
+  console.error('Fehler: BOT_TOKEN oder OPENAI_API_KEY ist nicht gesetzt!');
   process.exit(1);
 }
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-
-// Schlüsselwörter und Antworten
-const problems = [
-  {
-    keywords: ['humpelt', 'lahmt', 'bein', 'laufen', 'schmerzen'],
-    response: 'Es klingt, als hätte dein Tier Probleme mit dem Bewegungsapparat. Seit wann besteht das Problem? Gibt es noch weitere Symptome?'
-  },
-  {
-    keywords: ['erbrechen', 'kotzt', 'übelkeit', 'spuckt'],
-    response: 'Dein Tier scheint Magen-Darm-Probleme zu haben. Wie oft kommt das vor? Frisst und trinkt es normal?'
-  },
-  {
-    keywords: ['durchfall', 'stuhl', 'kot', 'dünn'],
-    response: 'Dein Tier hat Verdauungsprobleme. Seit wann besteht der Durchfall? Gibt es Blut oder Schleim im Kot?'
-  }
-];
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 // Nachrichtenverarbeitung
-bot.on('text', (ctx) => {
-  const msg = ctx.message.text.toLowerCase();
-  const found = problems.find(p => p.keywords.some(word => msg.includes(word)));
-  if (found) {
-    ctx.reply(found.response);
-  } else {
-    ctx.reply('Kannst du das Problem bitte noch etwas genauer beschreiben? Zum Beispiel: "Mein Hund humpelt seit 1 Woche."');
+bot.on('text', async (ctx) => {
+  const userMessage = ctx.message.text;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo", // oder "gpt-4", falls du Zugriff hast
+      messages: [
+        { role: "system", content: "Du bist ein freundlicher und kompetenter Tierarzt-Chatbot. Antworte hilfreich und verständlich auf Fragen zu Haustieren." },
+        { role: "user", content: userMessage }
+      ],
+      max_tokens: 500,
+      temperature: 0.7,
+    });
+
+    const reply = completion.choices[0].message.content.trim();
+    ctx.reply(reply);
+
+  } catch (error) {
+    console.error('OpenAI API Fehler:', error);
+    ctx.reply('Entschuldigung, es gab ein Problem beim Abrufen der Antwort von OpenAI.');
   }
 });
 
 // Bot starten
 bot.launch()
-  .then(() => console.log('Bot läuft!'))
+  .then(() => console.log('Bot läuft mit OpenAI!'))
   .catch(err => {
     console.error('Fehler beim Starten des Bots:', err);
     process.exit(1);

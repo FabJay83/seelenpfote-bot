@@ -1,6 +1,6 @@
 {
-  "name": "telegraf-openai-bot",
-  "version": "1.0.0",
+  "name": "seelenpfote-telegram-bot",
+  "version": "1.1.0",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {

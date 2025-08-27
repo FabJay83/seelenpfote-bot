@@ -1,15 +1,12 @@
 {
   "name": "seelenpfote-telegram-bot",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "main": "index.js",
   "type": "commonjs",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "engines": {
-    "node": ">=18.17"
-  },
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18.17" },
   "dependencies": {
+    "express": "^4.19.2",
     "openai": "^4.57.0",
     "telegraf": "^4.16.3"
   }

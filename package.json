@@ -1,19 +1,15 @@
 {
   "name": "seelenpfote-telegram-bot",
-  "version": "1.1.1",
-  "description": "Seelenpfote Bot – natürlicher Dialog ohne Slash-Kommandos",
+  "version": "1.2.0",
+  "description": "Seelenpfote Bot – natürlicher Dialog + OpenAI Vision",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-  "engines": {
-    "node": ">=18"
-  },
+  "engines": { "node": ">=18" },
   "dependencies": {
+    "openai": "^4.56.0",
     "telegraf": "^4.16.3"
   }
 }
-
-
-

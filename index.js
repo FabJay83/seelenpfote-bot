@@ -1,4 +1,4 @@
-// Seelenpfote – Dogs & Cats only 🐶🐱 + Notdienst-Button am Wochenende/Feiertag (standortbasiert)
+// Seelenpfote – Dogs & Cats only 🐶🐱 + Notdienst-Flow (Location robust, Apple/Google Maps, Fallbacks)
 const { Telegraf } = require('telegraf');
 const OpenAI = require('openai');
 
@@ -13,6 +13,8 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // ========= Gesprächsspeicher =========
 const sessions = new Map();
+const state = new Map(); // userId -> { awaitingLocation?: boolean, awaitingUntil?: number }
+
 function getSession(userId) {
   if (!sessions.has(userId)) {
     sessions.set(userId, [
@@ -50,35 +52,51 @@ async function askOpenAI(userId, userContent, temperature = 0.5) {
 // ========= Weekend/Feiertag-Check (bundesweite DE-Feiertage 2025) =========
 function isGermanHoliday2025(d) {
   const y = d.getFullYear();
-  if (y !== 2025) return false; // (Einfachheit: nur 2025 – bei Bedarf erweitern)
+  if (y !== 2025) return false;
   const pad = (n) => String(n).padStart(2, '0');
   const key = `${y}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
   const holidays = new Set([
-    '2025-01-01', // Neujahr
-    '2025-04-18', // Karfreitag
-    '2025-04-21', // Ostermontag
-    '2025-05-01', // Tag der Arbeit
-    '2025-05-29', // Christi Himmelfahrt
-    '2025-06-09', // Pfingstmontag
-    '2025-10-03', // Tag der Deutschen Einheit
-    '2025-12-25', // 1. Weihnachtstag
-    '2025-12-26'  // 2. Weihnachtstag
+    '2025-01-01','2025-04-18','2025-04-21','2025-05-01','2025-05-29','2025-06-09','2025-10-03','2025-12-25','2025-12-26'
   ]);
   return holidays.has(key);
 }
-function isWeekend(date) {
-  const day = date.getDay(); // 0=So, 6=Sa
-  return day === 0 || day === 6;
-}
-function isWeekendOrHoliday(date = new Date()) {
-  return isWeekend(date) || isGermanHoliday2025(date);
-}
+function isWeekend(date) { const d = date.getDay(); return d === 0 || d === 6; }
+function isWeekendOrHoliday(date = new Date()) { return isWeekend(date) || isGermanHoliday2025(date); }
 
-// ========= Notdienst-Flow =========
+// ========= Notdienst-UI =========
+function mapsInlineKeyboardFor(lat, lon) {
+  const enc = encodeURIComponent;
+  const g = (q) => `https://www.google.com/maps/search/${enc(q)}/@${lat},${lon},14z`;
+  const a = (q) => `https://maps.apple.com/?q=${enc(q)}&ll=${lat},${lon}&z=14`;
+  return {
+    inline_keyboard: [
+      [{ text: '🚑 Notdienst (Google Maps)', url: g('Tierärztlicher Notdienst') }],
+      [{ text: '⏰ Tierarzt 24h (Google Maps)', url: g('Tierarzt 24h') }],
+      [{ text: '🏥 Tierklinik (Google Maps)', url: g('Tierklinik') }],
+      [{ text: '🚑 Notdienst (Apple Maps)', url: a('Tierärztlicher Notdienst') }]
+    ]
+  };
+}
+function mapsInlineKeyboardForQuery(place) {
+  const enc = encodeURIComponent;
+  const g = (q) => `https://www.google.com/maps/search/${enc(q + ' ' + place)}`;
+  const a = (q) => `https://maps.apple.com/?q=${enc(q + ' ' + place)}`;
+  return {
+    inline_keyboard: [
+      [{ text: '🚑 Notdienst (Google Maps)', url: g('Tierärztlicher Notdienst') }],
+      [{ text: '⏰ Tierarzt 24h (Google Maps)', url: g('Tierarzt 24h') }],
+      [{ text: '🏥 Tierklinik (Google Maps)', url: g('Tierklinik') }],
+      [{ text: '🚑 Notdienst (Apple Maps)', url: a('Tierärztlicher Notdienst') }]
+    ]
+  };
+}
 async function sendNotdienstPrompt(ctx) {
+  const uid = ctx.from.id;
+  const until = Date.now() + 5 * 60 * 1000; // 5 Minuten
+  state.set(uid, { awaitingLocation: true, awaitingUntil: until });
   return ctx.reply(
-    '🚑 Wenn es dringend wirkt: Ich helfe dir, schnell jemanden zu finden. ' +
-    'Magst du mir dafür kurz deinen Standort senden? Dann zeige ich dir den nächsten tierärztlichen Notdienst.',
+    '🚑 Ich helfe dir sofort jemanden zu finden.\n' +
+    'Tippe unten auf „📍 Standort senden“. Wenn du das nicht möchtest, schreib mir einfach kurz deinen Ort/PLZ (z. B. „54290 Trier“).',
     {
       reply_markup: {
         keyboard: [[{ text: '📍 Standort senden', request_location: true }]],
@@ -87,17 +105,6 @@ async function sendNotdienstPrompt(ctx) {
       }
     }
   );
-}
-
-function mapsButtonsFor(lat, lon) {
-  const zoom = 14;
-  const enc = encodeURIComponent;
-  const base = (q) => `https://www.google.com/maps/search/${enc(q)}/@${lat},${lon},${zoom}z`;
-  return [
-    [{ text: '🚑 Tierärztlicher Notdienst', url: base('Tierärztlicher Notdienst') }],
-    [{ text: '⏰ Tierarzt 24h',            url: base('Tierarzt 24h') }],
-    [{ text: '🏥 Tierklinik',              url: base('Tierklinik') }]
-  ];
 }
 
 async function replyWithEmergencyCheck(ctx, answer) {
@@ -128,11 +135,7 @@ bot.start(async (ctx) => {
       "etwas über seinen Hund 🐶 oder seine Katze 🐱 zu erzählen oder ein Foto zu senden.";
     const answer = await askOpenAI(userId, intro, 0.4);
     await ctx.reply(answer);
-
-    // Am Wochenende / Feiertag direkt Notdienst-Flow anbieten
-    if (isWeekendOrHoliday(new Date())) {
-      await sendNotdienstPrompt(ctx);
-    }
+    if (isWeekendOrHoliday(new Date())) await sendNotdienstPrompt(ctx);
   } catch (e) {
     console.error(e);
     await ctx.reply('Willkommen bei Seelenpfote 🐾 – erzähl mir gern von deinem Hund oder deiner Katze.');
@@ -140,15 +143,28 @@ bot.start(async (ctx) => {
   }
 });
 
-// ========= Texte (mit manueller Notdienst-Auslösung) =========
+// ========= Texte (inkl. manuellem Notdienst-Trigger & Ortsname-Fallback) =========
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const text = (ctx.message.text || '').trim();
 
-  // Nutzer kann den Notdienst jederzeit per Text triggern
+  // Manuell triggern
   if (/notdienst|notfall|wochenende|feiertag|dringend/i.test(text)) {
     await sendNotdienstPrompt(ctx);
     return;
+  }
+
+  // Wenn wir gerade auf Standort warten, akzeptieren wir auch eine Orts-/PLZ-Eingabe
+  const st = state.get(userId);
+  if (st?.awaitingLocation && Date.now() < (st.awaitingUntil || 0)) {
+    // sehr simple Heuristik: Zahl oder Wort als Ort/PLZ
+    if (/^\d{4,5}\b/.test(text) || /[a-zäöüß\-]{3,}/i.test(text)) {
+      state.delete(userId);
+      await ctx.reply('Danke! Ich schaue direkt nach passenden Notdiensten …');
+      return ctx.reply('Hier sind Optionen – wähle, was am besten passt:', {
+        reply_markup: mapsInlineKeyboardForQuery(text)
+      });
+    }
   }
 
   try {
@@ -160,25 +176,31 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// ========= Standort-Empfang: zeige nächste Notdienste per Maps-Links =========
+// ========= Standort-Empfang: statisch & Live-Standort =========
 bot.on('location', async (ctx) => {
   try {
-    const { latitude, longitude } = ctx.message.location;
-    await ctx.reply(
-      'Hier sind Optionen in deiner Nähe – wähle, was am besten passt:',
-      {
-        reply_markup: {
-          inline_keyboard: mapsButtonsFor(latitude, longitude)
-        }
-      }
-    );
+    const { latitude, longitude, live_period } = ctx.message.location || {};
+    console.log('Location empfangen:', latitude, longitude, live_period ? '(live)' : '(statisch)');
+
+    // Tastatur einklappen
+    await ctx.reply('Danke! Ich suche sofort in deiner Nähe …', {
+      reply_markup: { remove_keyboard: true }
+    });
+
+    // State zurücksetzen
+    state.delete(ctx.from.id);
+
+    // Buttons mit Apple/Google-Maps
+    await ctx.reply('Hier sind Optionen – wähle, was am besten passt:', {
+      reply_markup: mapsInlineKeyboardFor(latitude, longitude)
+    });
   } catch (e) {
-    console.error(e);
-    await ctx.reply('Konnte deinen Standort leider nicht verarbeiten. Magst du ihn erneut senden?');
+    console.error('Fehler im Location-Handler:', e);
+    await ctx.reply('Konnte deinen Standort leider nicht verarbeiten. Magst du ihn erneut senden oder mir deinen Ort/PLZ schreiben?');
   }
 });
 
-// ========= Fotos (Vision) =========
+// ========= Fotos =========
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
   try {
@@ -193,7 +215,7 @@ bot.on('photo', async (ctx) => {
       content: [
         { type: 'text', text:
           "Hier ist ein Foto meiner Fellnase (Hund/Katze). Beurteile empathisch, " +
-          "was sichtbar sein könnte (z. B. Rötung, Schwellung, Wunde) und gib sanfte, sichere Hinweise. Nutze passende Emojis." },
+          "was sichtbar sein könnte (Rötung, Schwellung, Wunde). Gib sanfte, sichere Hinweise. Nutze passende Emojis." },
         { type: 'image_url', image_url: { url: fileUrl } }
       ]
     });
@@ -209,17 +231,15 @@ bot.on('photo', async (ctx) => {
     history.push({ role: 'assistant', content: answer });
 
     await replyWithEmergencyCheck(ctx, answer);
-    // Tipp: Am Wochenende/Feiertag zusätzlich proaktiv Standort anbieten
-    if (isWeekendOrHoliday(new Date())) {
-      await sendNotdienstPrompt(ctx);
-    }
+    // Optional bei Weekend/Holiday direkt Standort anbieten
+    if (isWeekendOrHoliday(new Date())) await sendNotdienstPrompt(ctx);
   } catch (e) {
     console.error(e);
     await ctx.reply('Das Foto konnte ich nicht auswerten. Magst du es nochmal senden oder beschreiben, was los ist? 📸');
   }
 });
 
-// ========= Dokumente (Bild als Datei) =========
+// ========= Dokumente =========
 bot.on('document', async (ctx) => {
   const userId = ctx.from.id;
   try {
@@ -232,7 +252,7 @@ bot.on('document', async (ctx) => {
       role: 'user',
       content: [
         { type: 'text', text:
-          "Hier ist eine Datei (wahrscheinlich ein Bild). Bitte beurteile empathisch (Hund/Katze) und gib sanfte Hinweise." },
+          "Hier ist eine Datei (vermutlich ein Bild). Bitte beurteile empathisch (Hund/Katze) und gib sanfte Hinweise." },
         { type: 'image_url', image_url: { url: fileUrl } }
       ]
     });
@@ -248,12 +268,10 @@ bot.on('document', async (ctx) => {
     history.push({ role: 'assistant', content: answer });
 
     await replyWithEmergencyCheck(ctx, answer);
-    if (isWeekendOrHoliday(new Date())) {
-      await sendNotdienstPrompt(ctx);
-    }
+    if (isWeekendOrHoliday(new Date())) await sendNotdienstPrompt(ctx);
   } catch (e) {
     console.error(e);
-    await ctx.reply('Die Datei konnte ich nicht auswerten. Magst du es mit einem Foto versuchen oder kurz beschreiben, was los ist? 📎');
+    await ctx.reply('Die Datei konnte ich nicht auswerten. Magst du es mit einem Foto versuchen oder beschreiben, was los ist? 📎');
   }
 });
 
@@ -262,7 +280,7 @@ bot.on('document', async (ctx) => {
   try {
     await bot.telegram.deleteWebhook({ drop_pending_updates: true });
     await bot.launch({ dropPendingUpdates: true });
-    console.log('Seelenpfote läuft (Dogs & Cats + Notdienst Location) 🐶🐱🚑');
+    console.log('Seelenpfote läuft (Dogs & Cats + robustes Notdienst-Location) 🐶🐱🚑');
   } catch (e) {
     console.error('Startfehler:', e);
     process.exit(1);
@@ -271,6 +289,7 @@ bot.on('document', async (ctx) => {
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 
 
 

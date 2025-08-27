@@ -24,7 +24,7 @@ const fmtProfile = (d) => {
   return `${name}\n${pets}`;
 };
 
-// --- freundliche Texte (kein MarkdownV2 notwendig) ---
+// --- freundliche Texte ---
 const START_TEXT =
 `🌸 Willkommen bei Seelenpfote 🐾
 Schön, dass du da bist! Ich bin dein einfühlsamer Tier-Begleiter. Sprich einfach ganz normal mit mir:
@@ -32,31 +32,6 @@ Schön, dass du da bist! Ich bin dein einfühlsamer Tier-Begleiter. Sprich einfa
 • „Ich heiße Max.“  → ich merke mir deinen Namen
 • „Mein Hund heißt Jaxx.“ oder „Ich habe eine Katze namens Luna.“  → ich speichere dein Tier
 • „Zeig mir mein Profil.“  → ich fasse alles für dich zusammen
-• „Alles löschen“ oder „Setz zurück“  → ich lösche die gespeicherten Daten
+• „Alles löschen“ oder „Setz zurück“  → ich lösche die gespeicherten Date
 
-Wenn du mir unsicher bist, frag einfach: „Was kann ich sagen?“ 😊`;
-
-const HELP_TEXT =
-`Ich verstehe natürliche Sätze wie:
-• „Ich heiße … / Mein Name ist …“
-• „Mein Hund/Meine Katze heißt …“ oder „Ich habe einen … namens …“
-• „Zeig mir mein Profil / Was weißt du über mich?“
-• „Alles löschen / Zurücksetzen“
-Ich bin für dich da 💛`;
-
-// --- Intent-Erkennung (de) ---
-const ANIMALS = [
-  'hund','katze','kater','welpe','hündin','kaninchen','hamster','meerschweinchen','vogel',
-  'papagei','sittich','kanarie','pferd','pony','esel','ziege','schaf','kuh','fisch','schildkröte',
-  'echse','gecko','schlange','igel','frettchen','ratte','maus','wellensittich','border collie','mops','boston terrier'
-];
-
-// Name: „Ich heiße Max“, „Mein Name ist Max“, „Nennt mich Max“
-const nameRegexes = [
-  /\b(?:ich\s+heiße|ich\s+heisse|mein\s+name\s+ist|nenn(?:e|t)?\s+mich)\s+([a-zäöüß\- ]{2,})\b/i,
-  /\b(?:ich\s+bin)\s+([a-zäöüß\- ]{2,})\b/i
-];
-
-// Tier: „Mein Hund heißt Jaxx“, „Ich habe eine Katze namens Luna“, „Mein Hund Jaxx“
-const p
 

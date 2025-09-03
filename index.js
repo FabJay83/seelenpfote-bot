@@ -1,6 +1,6 @@
 // Seelenpfote Telegram-Bot (Polling only)
-// Hunde & Katzen, empathisch, per-User-Memory, Foto-Analyse, Notdienst-Suche via Standort (OSM/Overpass)
-// Kein Webhook/Express nötig. Läuft mit 1 Instanz auf Railway.
+// Hunde & Katzen, empathisch, Memory (Name/Tiere), Red-Flag -> Standort & Notdienst (OSM/Overpass),
+// Vision: fokussiert auf beschriebene Auffälligkeit (keine generischen Pflegetipps), JSON-Persistenz.
 
 const { Telegraf } = require("telegraf");
 const OpenAI = require("openai");
@@ -18,7 +18,15 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // ===== Persistenz (JSON) =====
 const DB_FILE = path.join(__dirname, "data.json");
-/** DB.users[chatId] = { ownerName, pets:[{name,species:'hund'|'katze'}], notes, pending: 'vet'|null } */
+/**
+ * DB.users[chatId] = {
+ *   ownerName: string|null,
+ *   pets: [{name, species:'hund'|'katze'}],
+ *   notes: string,
+ *   pending: 'vet'|null,
+ *   lastIssue: string|null // letzte textliche Beschreibung (z.B. "Beule über der Nase")
+ * }
+ */
 let DB = { users: {} };
 
 function loadDB() {
@@ -37,12 +45,10 @@ function saveDB() {
 loadDB();
 
 function getProfile(chatId) {
-  if (!DB.users[chatId]) DB.users[chatId] = { ownerName: null, pets: [], notes: "", pending: null };
+  if (!DB.users[chatId]) DB.users[chatId] = { ownerName: null, pets: [], notes: "", pending: null, lastIssue: null };
   return DB.users[chatId];
 }
-function setOwnerName(chatId, name) {
-  const p = getProfile(chatId); p.ownerName = name; saveDB();
-}
+function setOwnerName(chatId, name) { const p = getProfile(chatId); p.ownerName = name; saveDB(); }
 function normalizeSpecies(sp) {
   if (!sp) return null;
   const s = sp.toLowerCase().trim();
@@ -52,7 +58,7 @@ function normalizeSpecies(sp) {
 }
 function addPet(chatId, name, speciesRaw) {
   const species = normalizeSpecies(speciesRaw || "");
-  if (!species) return false; // nur Hund/Katze
+  if (!species) return false;
   const p = getProfile(chatId);
   if (!p.pets) p.pets = [];
   const idx = p.pets.findIndex(x => x.name?.toLowerCase() === name.toLowerCase());
@@ -62,7 +68,7 @@ function addPet(chatId, name, speciesRaw) {
   return true;
 }
 function clearProfile(chatId) {
-  DB.users[chatId] = { ownerName: null, pets: [], notes: "", pending: null };
+  DB.users[chatId] = { ownerName: null, pets: [], notes: "", pending: null, lastIssue: null };
   saveDB();
 }
 function profileSummary(p) {
@@ -73,8 +79,8 @@ function profileSummary(p) {
 // ===== Prompting =====
 function buildSystemPrompt(profile) {
   const who =
-    `Du bist "Seelenpfote", ein warmherziger, mitfühlender Begleiter für Tierhalter:innen. ` +
-    `Du unterstützt ausschließlich HUNDE und KATZEN. Für andere Tiere lehnst du freundlich ab und empfiehlst, eine geeignete Tierpraxis zu kontaktieren. ` +
+    `Du bist "Seelenpfote", ein warmherziger, mitfühlender Begleiter. ` +
+    `Du unterstützt ausschließlich HUNDE und KATZEN (andere Tiere freundlich ablehnen). ` +
     `Du sprichst wie ein vertrauter Freund, bleibst professionell, beruhigst und stärkst. ` +
     `Gib konkrete, machbare Schritte. Bei ernsten Symptomen rätst du klar zum Tierarzt/Notdienst.`;
 
@@ -89,42 +95,32 @@ function buildSystemPrompt(profile) {
 
   const style =
     `Stil:\n` +
-    `- Begrüße persönlich und nenne bekannte Tiernamen.\n` +
-    `- Verwende 1–3 passende Emojis (🐾❤️🙂) dezent.\n` +
-    `- Aktives Zuhören: fasse das Anliegen kurz zusammen.\n` +
-    `- Klare Handlungsschritte als kurze Bulletpoints, einfacher Wortschatz.\n` +
-    `- **Kein Fragesatz als Abschluss** – schließe warm & ermutigend, ohne Rückfragen.\n` +
-    `- Keine Ferndiagnosen; bei Red Flags: Tierarzt/Notdienst empfehlen.`;
+    `- Persönliche Ansprache; bekannte Tiernamen nutzen.\n` +
+    `- 1–3 passende Emojis (🐾❤️🙂) dezent.\n` +
+    `- Kurze, klare Sätze; Bulletpoints für Schritte.\n` +
+    `- **Kein Fragesatz als Abschluss** – warm & ermutigend enden.\n` +
+    `- Keine Ferndiagnosen; bei Red Flags klar Notdienst empfehlen.`;
 
-  const fewshot =
-    `Beispiel (Hund, ohne Rückfrage am Ende):\n` +
-    `User: "Mein Hund Jaxx frisst seit gestern kaum."\n` +
-    `Assistent: "Das tut mir leid, ${profile.ownerName || "du"}. ❤️ Ich höre: Jaxx frisst seit gestern wenig. \n• Heute Wasseraufnahme & Energie prüfen.\n• Leicht verdauliches Futter (Huhn+Reis) in kleinen Portionen anbieten.\n• Auf Erbrechen, Durchfall oder Schmerzzeichen achten.\n• Wenn Jaxx apathisch wirkt oder >24h gar nicht frisst → bitte Tierarzt. \nIch bin bei euch. 🐾"\n\n` +
-    `Beispiel (Nicht Hund/Katze):\n` +
-    `User: "Mein Kaninchen frisst nicht."\n` +
-    `Assistent: "Ich bin auf Hunde & Katzen spezialisiert 🐾. Bitte wende dich an eine kleintierkundige Praxis oder den Notdienst – das ist hier am sinnvollsten. ❤️"`;
+  const visionFocus =
+    `WICHTIG (Vision): Wenn es um ein Foto mit einer beschriebenen Auffälligkeit geht (z. B. "Beule über der Nase"), ` +
+    `FOKUSSIERE dich ausschließlich darauf. **Keine generischen Pflege-Listen**. Sag, worauf zu achten ist (Größe, Rötung, Wärme, Schmerz, Verhalten), ` +
+    `wann Tierarzt sinnvoll ist, und gib 2–5 gezielte Beobachtungs-/Handlungs-Schritte.`;
 
-  return `${who}\n\n${memory}\n${style}\n\n${fewshot}`;
+  return `${who}\n\n${memory}\n${style}\n\n${visionFocus}`;
 }
 
-// ===== Sanfte Nachbearbeitung: warm, ohne Rückfrage =====
+// ===== Abschluss ohne Frage-Spam =====
 function friendlyFinish(text) {
   let out = (text || "").trim();
-
-  // Doppelherzen vermeiden
-  const endsWithHeart = /[❤️]$/.test(out);
-  const endsWithPaw = /[🐾]$/.test(out);
-  const hasAnyEmoji = /[\u231A-\uD83E\uDDFF]/.test(out);
-
-  if (!hasAnyEmoji) out += " 🐾";
-  if (!endsWithHeart && !/❤️/.test(out)) out += " ❤️";
-
-  // Keine zusätzlichen Fragen anhängen – bewusst NICHTS weiter hinzufügen.
+  const hasEmoji = /[\u231A-\uD83E\uDDFF]/.test(out);
+  if (!hasEmoji) out += " 🐾";
+  if (!/❤️$/.test(out) && !/❤️/.test(out)) out += " ❤️";
   return out;
 }
 
-// ===== Heuristik: Namen/Tiere aus Freitext (nur Hund/Katze) =====
+// ===== Heuristik: Namen/Tiere + letzte Auffälligkeit merken =====
 function maybeExtractData(chatId, text) {
+  const p = getProfile(chatId);
   const nameMatch = text.match(/\bmein\s+name\s+ist\s+([A-Za-zÀ-ÿ' -]{2,40})/i);
   if (nameMatch) setOwnerName(chatId, nameMatch[1].trim());
 
@@ -133,6 +129,16 @@ function maybeExtractData(chatId, text) {
     const species = normalizeSpecies(petMatch[2]);
     const petName = petMatch[4].trim();
     if (species) addPet(chatId, petName, species);
+  }
+
+  // „Letzte Auffälligkeit“ grob aus Text übernehmen (z.B. "Beule über der Nase")
+  const issueCandidates = [
+    /beule[^.?!\n]*/i, /schwellung[^.?!\n]*/i, /wunde[^.?!\n]*/i, /rötung[^.?!\n]*/i,
+    /laufschwierigkeiten[^.?!\n]*/i, /humpeln[^.?!\n]*/i, /erbrechen[^.?!\n]*/i,
+  ];
+  for (const re of issueCandidates) {
+    const m = text.match(re);
+    if (m) { p.lastIssue = m[0].trim(); saveDB(); break; }
   }
 }
 
@@ -203,7 +209,7 @@ async function findNearbyVets(lat, lon, radiusMeters = 8000, limit = 6) {
   return results.slice(0, limit);
 }
 function formatVetList(vets) {
-  if (!vets.length) return "Ich habe in der Nähe leider nichts gefunden. Versuche es bitte erneut oder prüfe eine größere Umgebung. 🐾❤️";
+  if (!vets.length) return "Ich habe in der Nähe leider nichts gefunden. Versuche es später erneut oder erweitere die Umgebung. 🐾❤️";
   const lines = vets.map(v => {
     const km = v.dist != null ? `${v.dist.toFixed(1)} km` : "";
     const gmaps = `https://www.google.com/maps?q=${v.lat},${v.lon}`;
@@ -233,13 +239,13 @@ bot.start(async (ctx) => {
   const intro =
     `Hey ${p.ownerName ? p.ownerName : "und herzlich willkommen"}! 🐾\n` +
     `Ich bin **Seelenpfote**, dein einfühlsamer Begleiter für **Hunde & Katzen**. ` +
-    `Bei Notfällen kann ich deinen Standort anfragen und dir direkt **Tierärzte/Notdienste in der Nähe** zeigen.\n\n` +
+    `Bei Notfällen kann ich deinen Standort anfragen und dir direkt **Tierärzte/Notdienste** in der Nähe zeigen.\n\n` +
     `• Namen setzen: /myname Max\n` +
     `• Tier speichern: /addpet Name (Hund|Katze)  → z.B.  /addpet Jaxx Hund\n` +
     `• Profil anzeigen: /profile\n` +
     `• Zurücksetzen: /reset\n` +
     `• Notdienst suchen: /notdienst\n\n` +
-    `Schreib mir einfach oder sende ein Foto. ❤️`;
+    `Schreib mir einfach oder sende ein Foto – beschreibe dabei kurz die Auffälligkeit (z. B. "Beule über der Nase"). ❤️`;
   await ctx.reply(intro, { parse_mode: "Markdown" });
 });
 
@@ -319,6 +325,7 @@ bot.on("text", async (ctx) => {
   const userMessage = (ctx.message?.text || "").trim();
   if (!userMessage) return;
 
+  // Nur Hunde/Katzen
   if (mentionsNonDogCat(userMessage)) {
     return ctx.reply(
       "Ich bin speziell für **Hunde & Katzen** da. Für andere Tiere ist eine passende Tierarztpraxis die beste Wahl. 🐾❤️",
@@ -326,14 +333,15 @@ bot.on("text", async (ctx) => {
     );
   }
 
+  // Daten & letzte Auffälligkeit merken
   maybeExtractData(chatId, userMessage);
 
-  // Red Flags -> sofort Standort-Flow anbieten (ohne Rückfrage)
+  // Red Flags -> Standort anbieten
   if (isRedFlag(userMessage)) {
     const p = getProfile(chatId);
     p.pending = "vet"; saveDB();
     await ctx.reply(
-      "Das klingt dringend. Bitte suche zeitnah eine Tierarztpraxis auf. Ich helfe dir sofort mit Adressen in deiner Nähe – sende mir einfach deinen Standort. 🐾❤️",
+      "Das klingt dringend. Bitte suche zeitnah eine Tierarztpraxis auf. Ich helfe dir sofort mit Adressen in der Nähe – sende mir einfach deinen Standort. 🐾❤️",
       { parse_mode: "Markdown", ...requestLocationKeyboard }
     );
   }
@@ -370,22 +378,36 @@ bot.on("text", async (ctx) => {
   }
 });
 
-// ===== Foto (Vision) =====
+// ===== Foto (Vision) – fokussiert auf beschriebene Auffälligkeit =====
+function buildVisionFocusText(ctx, chatId) {
+  // nutze erst die Bild-Unterschrift, sonst letzte textliche Beschreibung
+  const cap = (ctx.message.caption || "").trim();
+  const p = getProfile(chatId);
+  const last = p.lastIssue ? ` (letzte Beschreibung: ${p.lastIssue})` : "";
+  return cap ? cap : (p.lastIssue ? p.lastIssue : "auffällige Stelle");
+}
+
 bot.on("photo", async (ctx) => {
   try {
+    const chatId = String(ctx.chat.id);
     const sizes = ctx.message.photo || [];
     const fileId = sizes.at(-1).file_id;
     const dataUrl = await telegramFileToBase64(ctx, fileId);
-    const profile = getProfile(String(ctx.chat.id));
+    const profile = getProfile(chatId);
+    const focus = buildVisionFocusText(ctx, chatId);
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "Du bist Seelenpfote: empathisch, beruhigend, nur Hunde & Katzen. Erkennst du kein Hund/Katze, erkläre kurz freundlich, dass du darauf spezialisiert bist." },
-        { role: "user", content: [
-            { type: "text", text: "Dieses Foto zeigt meinen Hund oder meine Katze. Bitte gib mir vorsichtige, praktische Hinweise (keine Ferndiagnosen). Schließe warm, ohne Rückfrage." },
+        { role: "system", content: buildSystemPrompt(profile) },
+        { role: "assistant", content: "Ich beziehe mich ausschließlich auf die beschriebene Auffälligkeit und vermeide generische Pflegetipps." },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Bitte schau **nur** auf folgendes: ${focus}. Sag mir, worauf ich achten soll (Größe, Rötung, Wärme, Schmerz, Verhalten) und wann Tierarzt sinnvoll ist. 2–5 kurze, praktische Schritte. Keine allgemeinen Haustierpflege-Listen.` },
             { type: "image_url", image_url: { url: dataUrl } }
-        ] }
+          ]
+        }
       ],
       temperature: 0.6,
       max_tokens: 600
@@ -400,24 +422,31 @@ bot.on("photo", async (ctx) => {
   }
 });
 
-// ===== Dokument-Bild =====
+// ===== Dokument-Bild (Vision) =====
 bot.on("document", async (ctx) => {
   try {
+    const chatId = String(ctx.chat.id);
     const mime = ctx.message.document?.mime_type || "";
     if (!mime.startsWith("image/")) {
       return ctx.reply("Sende bitte ein Bild (PNG/JPG) – als Foto oder als Bild-Datei. 🐾❤️");
     }
     const fileId = ctx.message.document.file_id;
     const dataUrl = await telegramFileToBase64(ctx, fileId);
+    const profile = getProfile(chatId);
+    const focus = buildVisionFocusText(ctx, chatId);
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "Du bist Seelenpfote: empathisch, beruhigend, nur Hunde & Katzen. Schließe warm, ohne Rückfrage." },
-        { role: "user", content: [
-            { type: "text", text: "Dieses Bild ist von meinem Hund oder meiner Katze. Bitte gib mir sanfte, praktische Tipps (keine Ferndiagnosen)." },
+        { role: "system", content: buildSystemPrompt(profile) },
+        { role: "assistant", content: "Ich beziehe mich ausschließlich auf die beschriebene Auffälligkeit und vermeide generische Pflegetipps." },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Bitte schau **nur** auf folgendes: ${focus}. Gib 2–5 gezielte Beobachtungs-/Handlungsschritte; nenne, wann Tierarzt/Notdienst sinnvoll ist. Keine allgemeinen Listen.` },
             { type: "image_url", image_url: { url: dataUrl } }
-        ] }
+          ]
+        }
       ],
       temperature: 0.6,
       max_tokens: 600
@@ -449,6 +478,7 @@ process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));
 process.on("uncaughtException", (e) => console.error("uncaughtException:", e));
+
 
 
 

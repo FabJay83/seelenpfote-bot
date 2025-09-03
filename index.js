@@ -1,18 +1,14 @@
-// Seelenpfote Telegram-Bot (Telegraf + OpenAI v4)
-// Features: empathisch, per-User-Memory (Name/Tiere), Foto-Analyse, Polling/Webhook, JSON-Persistenz
+// Seelenpfote Telegram-Bot (Polling only)
+// Features: empathisch, per-User-Memory (Name/Tiere), Foto-Analyse (Telegram->Base64->OpenAI), JSON-Persistenz
 
 const { Telegraf } = require("telegraf");
 const OpenAI = require("openai");
 const fs = require("fs");
 const path = require("path");
-const express = require("express");
-const http = require("http");
 
 // ====== ENV ======
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const PUBLIC_URL = process.env.PUBLIC_URL; // optional: https://<deinprojekt>.up.railway.app
-const PORT = process.env.PORT || 3000;
 
 if (!BOT_TOKEN) { console.error("Fehler: BOT_TOKEN fehlt"); process.exit(1); }
 if (!OPENAI_API_KEY) { console.error("Fehler: OPENAI_API_KEY fehlt"); process.exit(1); }
@@ -231,8 +227,8 @@ bot.on("photo", async (ctx) => {
         {
           role: "user",
           content: [
-            { type: "text", text: "Bitte hilf mir, dieses Haustier-Foto einzuschätzen und gib hilfreiche Hinweise." },
-            { type: "image_url", image_url: { url: dataUrl } }
+            { type: "input_text", text: "Bitte hilf mir, dieses Haustier-Foto einzuschätzen und gib hilfreiche Hinweise." },
+            { type: "input_image", image_url: dataUrl }
           ]
         }
       ],
@@ -265,8 +261,8 @@ bot.on("document", async (ctx) => {
         {
           role: "user",
           content: [
-            { type: "text", text: "Bitte bewerte dieses Bild meines Tieres und gib sanfte, pragmatische Tipps." },
-            { type: "image_url", image_url: { url: dataUrl } }
+            { type: "input_text", text: "Bitte bewerte dieses Bild meines Tieres und gib sanfte, pragmatische Tipps." },
+            { type: "input_image", image_url: dataUrl }
           ]
         }
       ],
@@ -282,27 +278,13 @@ bot.on("document", async (ctx) => {
   }
 });
 
-// ====== START (Webhook bevorzugt, sonst Polling) ======
+// ====== START (POLLING) ======
 (async () => {
   try {
-    if (PUBLIC_URL) {
-      const pathSuffix = `/telegram/${BOT_TOKEN.slice(-12)}`;
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-      await bot.telegram.setWebhook(`${PUBLIC_URL}${pathSuffix}`);
-
-      const app = express();
-      app.use(express.json());
-      app.use(bot.webhookCallback(pathSuffix));
-      app.get("/", (_req, res) => res.status(200).send("OK")); // Healthcheck
-
-      http.createServer(app).listen(PORT, () => {
-        console.log(`✅ Webhook aktiv: ${PUBLIC_URL}${pathSuffix} (Port ${PORT})`);
-      });
-    } else {
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
-      await bot.launch();
-      console.log("✅ Polling aktiv (kein PUBLIC_URL gesetzt).");
-    }
+    // Sicherstellen, dass kein Webhook gesetzt ist (sonst 409 bei Polling)
+    await bot.telegram.deleteWebhook({ drop_pending_updates: true }).catch(() => {});
+    await bot.launch();
+    console.log("✅ Polling aktiv. (Bitte nur 1 Instanz laufen lassen!)");
   } catch (err) {
     console.error("Startfehler:", err);
     process.exit(1);
@@ -314,6 +296,7 @@ process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
 process.on("unhandledRejection", (e) => console.error("unhandledRejection:", e));
 process.on("uncaughtException", (e) => console.error("uncaughtException:", e));
+
 
 
 
